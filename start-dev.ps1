@@ -12,7 +12,7 @@ if ($existing) {
     Start-Sleep -Seconds 1
 }
 
-Write-Host "Starting Fantasy Baseball Draft Assistant..." -ForegroundColor Cyan
+Write-Host "Starting Fantasy Draft Assistant..." -ForegroundColor Cyan
 
 # 1. Spring Boot backend (port 8080)
 Start-Process powershell -ArgumentList "-NoExit", "-Command",

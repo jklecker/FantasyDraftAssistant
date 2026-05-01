@@ -2,21 +2,28 @@ package com.example.fantasybaseball.service;
 
 import com.example.fantasybaseball.dto.KeeperDTO;
 import com.example.fantasybaseball.model.*;
+import com.example.fantasybaseball.util.FuzzyMatcher;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 
 /**
  * Core draft engine. Manages state, snake-order advancement,
  * keeper assignment, and pick submission.
+ *
+ * <p>All public methods are synchronized on this instance. DraftService is a
+ * Spring singleton holding mutable in-memory state, so synchronization prevents
+ * race conditions when multiple requests arrive concurrently (e.g. two browser
+ * tabs submitting a pick at the same time).
  */
 @Service
 public class DraftService {
 
     private DraftState draftState;
 
-    public void initializeDraft(List<Team> teams, List<Player> players, boolean snakeOrder) {
+    public synchronized void initializeDraft(List<Team> teams, List<Player> players, boolean snakeOrder) {
         draftState = new DraftState();
         draftState.setTeams(new ArrayList<>(teams));
         draftState.setAvailablePlayers(new ArrayList<>(players));
@@ -26,7 +33,7 @@ public class DraftService {
         draftState.setSnakeOrder(snakeOrder);
     }
 
-    public boolean isDraftInitialized() {
+    public synchronized boolean isDraftInitialized() {
         return draftState != null;
     }
 
@@ -34,7 +41,7 @@ public class DraftService {
      * Returns the Team currently on the clock based on the snake-draft order.
      * Odd rounds → ascending order. Even rounds → descending order.
      */
-    public Team getCurrentPickingTeam() {
+    public synchronized Team getCurrentPickingTeam() {
         if (draftState == null) return null;
         int numTeams = draftState.getTeams().size();
         int pick = draftState.getCurrentPick(); // 1-based
@@ -52,7 +59,7 @@ public class DraftService {
      * Load keepers before the draft starts. Keepers are removed from the
      * available pool and assigned to their team rosters immediately.
      */
-    public void loadKeepers(List<KeeperDTO> keepers) {
+    public synchronized void loadKeepers(List<KeeperDTO> keepers) {
         if (draftState == null) {
             throw new IllegalStateException("Draft not initialized. Call /draft/initialize first.");
         }
@@ -86,7 +93,7 @@ public class DraftService {
      * Submit a draft pick for a given player by the currently picking team.
      * The teamId is derived from the snake order automatically.
      */
-    public Team makePick(int playerId) {
+    public synchronized Team makePick(int playerId) {
         if (draftState == null) {
             throw new IllegalStateException("Draft not initialized.");
         }
@@ -124,21 +131,31 @@ public class DraftService {
 
     /**
      * Submit a pick by player name. Tries exact match first (case-insensitive),
-     * then falls back to partial substring match.
+     * then falls back to FuzzyMatcher scoring to handle typos, partial names,
+     * and abbreviations (e.g. "mik tro" → "Mike Trout").
      */
-    public Team makePickByName(String name) {
+    public synchronized Team makePickByName(String name) {
         if (draftState == null) {
             throw new IllegalStateException("Draft not initialized.");
         }
-        String lower = name.trim().toLowerCase();
+        String query = name.trim().toLowerCase();
+
+        // 1. Exact match (fastest path)
         Player picked = draftState.getAvailablePlayers().stream()
                 .filter(p -> p.getName().equalsIgnoreCase(name.trim()))
                 .findFirst()
-                .orElseGet(() -> draftState.getAvailablePlayers().stream()
-                        .filter(p -> p.getName().toLowerCase().contains(lower))
-                        .findFirst()
-                        .orElseThrow(() -> new IllegalArgumentException(
-                                "No available player found matching: " + name)));
+                .orElse(null);
+
+        // 2. Fuzzy match — pick the highest-scoring candidate above threshold
+        if (picked == null) {
+            picked = draftState.getAvailablePlayers().stream()
+                    .map(p -> new Object[]{p, FuzzyMatcher.score(p.getName().toLowerCase(), query)})
+                    .filter(pair -> (double) pair[1] >= 0.4)
+                    .max(Comparator.comparingDouble(pair -> (double) pair[1]))
+                    .map(pair -> (Player) pair[0])
+                    .orElseThrow(() -> new IllegalArgumentException(
+                            "No available player found matching: " + name));
+        }
 
         Team currentTeam = getCurrentPickingTeam();
         draftState.getAvailablePlayers().remove(picked);
@@ -148,7 +165,7 @@ public class DraftService {
         return currentTeam;
     }
 
-    public DraftState getDraftState() {
+    public synchronized DraftState getDraftState() {
         return draftState;
     }
 
@@ -156,7 +173,7 @@ public class DraftService {
      * Get the currently active scoring preset key for this draft session.
      * Defaults to "h2h_categories" if not set.
      */
-    public String getActiveScoringPreset() {
+    public synchronized String getActiveScoringPreset() {
         if (draftState == null) {
             throw new IllegalStateException("Draft not initialized.");
         }
@@ -167,7 +184,7 @@ public class DraftService {
      * Set the active scoring preset for this draft session.
      * This affects all future recommendations calculations.
      */
-    public void setActiveScoringPreset(String presetKey) {
+    public synchronized void setActiveScoringPreset(String presetKey) {
         if (draftState == null) {
             throw new IllegalStateException("Draft not initialized.");
         }

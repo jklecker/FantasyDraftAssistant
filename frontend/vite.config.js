@@ -6,7 +6,7 @@ export default defineConfig({
     react(),
   ],
   server: {
-    port: 5173,
+    port: 3000,
     proxy: {
       '/draft':   { target: 'http://localhost:8080', changeOrigin: true },
       '/players': { target: 'http://localhost:8080', changeOrigin: true },

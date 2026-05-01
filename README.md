@@ -1,7 +1,8 @@
-# Fantasy Baseball Draft Assistant 🏟️
+# Fantasy Draft Assistant 🏟️
 
-A **Spring Boot + React** draft assistant for a 12-team, H2H weekly-categories fantasy baseball league.  
-Supports snake draft order, keeper players, live pick tracking, positional scarcity scoring, and category-aware player recommendations.
+A **Spring Boot + React** multi-sport draft assistant supporting fantasy baseball and football.  
+Baseball: 12-team H2H weekly-categories league with snake draft, keeper support, live pick tracking, positional scarcity scoring, and MLB Stats API integration.  
+Football: PPR / Standard / Half-PPR / Custom JSON scoring with VBD-based recommendations.
 
 ---
 
@@ -24,8 +25,8 @@ Install these once on any PC you want to run the app on:
 
 ```powershell
 # 1. Clone the repo
-git clone https://github.com/jklecker/FantasyBaseballDraftAssistant.git
-cd FantasyBaseballDraftAssistant
+git clone https://github.com/jklecker/FantasyDraftAssistant.git
+cd FantasyDraftAssistant
 
 # 2. Install frontend dependencies (one-time only)
 cd frontend
@@ -51,6 +52,7 @@ This opens **two terminal windows** — one for the backend, one for the fronten
 | Frontend (React) | http://localhost:3000 |
 
 Open **http://localhost:3000** in your browser.  
+> The frontend runs on port 3000 (configured in `frontend/vite.config.js`).  
 > First boot takes ~30 seconds while Gradle warms up. Subsequent starts are faster.
 
 ---
@@ -151,7 +153,7 @@ The frontend Docker build is pinned to **Node 20** and now uses the committed `f
 ## Project structure
 
 ```
-FantasyBaseballDraftAssistant/
+FantasyDraftAssistant/
 ├── start-dev.ps1              ← run this to start everything locally
 ├── Dockerfile                 ← production build
 ├── render.yaml                ← Render deployment config

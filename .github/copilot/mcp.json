@@ -1,0 +1,29 @@
+{
+  "servers": {
+    "eng-mcp-tool": {
+      "type": "http",
+      "url": "http://localhost:8080/mcp"
+    },
+    "figma-builder-mcp": {
+      "type": "http",
+      "url": "http://localhost:8001/mcp"
+    },
+    "memory": {
+      "type": "http",
+      "url": "http://localhost:8002/mcp"
+    },
+    "figma": {
+      "type": "http",
+      "url": "https://mcp.figma.com/mcp"
+    },
+    "ticket-worker": {
+      "type": "stdio",
+      "command": "powershell",
+      "args": [
+        "-ExecutionPolicy", "Bypass",
+        "-File", "C:\\Users\\jklecker\\Docs\\Dev\\AI-Agents/ticket-worker/run.ps1"
+      ]
+    }
+  }
+}
+

@@ -64,3 +64,9 @@ frontend/src/
 - **Draft state is in-memory** — resets on container restart (Render free tier idles after ~15 min)
 - **Scoring model**: base weights for 15 MLB stats + team-need bonuses + positional scarcity bonuses (up to +50 pts) + late-round upside weighting (round 11+)
 - **Render deployment**: auto-detected via `render.yaml`; uses committed `package-lock.json` for reproducible builds
+
+## Memory (automatic)
+A `memory` MCP server is available at `http://localhost:8002/mcp`. Use it proactively â€” do not wait for the user to ask.
+- **Start of session**: Call `recall` with a query relevant to what you're working on.
+- **When the user corrects you** or you discover a project convention: Call `remember` immediately.
+- **End of session**: If significant decisions were made, call `save_session` with a summary.
