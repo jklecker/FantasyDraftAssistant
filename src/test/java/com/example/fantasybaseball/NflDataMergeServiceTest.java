@@ -1,6 +1,8 @@
 package com.example.fantasybaseball;
 
 import com.example.fantasybaseball.model.Player;
+import com.example.fantasybaseball.service.CbsRankingsService;
+import com.example.fantasybaseball.service.EspnAdpService;
 import com.example.fantasybaseball.service.FantasyProsService;
 import com.example.fantasybaseball.service.NflDataMergeService;
 import com.example.fantasybaseball.service.NflPlayerService;
@@ -23,6 +25,8 @@ class NflDataMergeServiceTest {
 
     @Mock NflPlayerService   sleeperSvc;
     @Mock FantasyProsService fpSvc;
+    @Mock EspnAdpService     espnSvc;
+    @Mock CbsRankingsService cbsSvc;
     @InjectMocks NflDataMergeService mergeService;
 
     private NflPlayerService.SleeperPlayer sleeperPlayer(String name, String team, String pos) {
@@ -49,6 +53,8 @@ class NflDataMergeServiceTest {
         when(sleeperSvc.getPlayers()).thenReturn(List.of());
         when(fpSvc.getRankings(anyString())).thenReturn(List.of());
         when(fpSvc.getProjections(anyString())).thenReturn(List.of());
+        when(espnSvc.getRankings(anyString())).thenReturn(List.of());
+        when(cbsSvc.getRankings(anyString())).thenReturn(List.of());
     }
 
     @Test void exactNameMatchAttachesRankAndProjection() {

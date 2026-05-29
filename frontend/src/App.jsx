@@ -6,6 +6,7 @@ import { normalizeFootballPlayers } from './adapters/footballAdapter.js';
 import { FOOTBALL_PLAYERS } from './data/footballPlayers.js';
 import { runDraftEngine } from './utils/draftEngine.js';
 import { calculateFantasyPoints } from './utils/calculateFantasyPoints.js';
+import TradeAnalyzer from './TradeAnalyzer.jsx';
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
@@ -115,7 +116,15 @@ export default function App() {
   const [customFootballScoring, setCustomFootballScoring] = useState(null);
   const [customScoringJson, setCustomScoringJson] = useState('');
   const [customScoringError, setCustomScoringError] = useState('');
-  const [footballDraftedIds, setFootballDraftedIds] = useState([]);
+  // Football per-team picks: [{playerId, teamSlot, overall}] in draft order.
+  // teamSlot is auto-assigned via snake draft based on `footballTeamSize`.
+  const [footballPicks, setFootballPicks] = useState(() => {
+    try {
+      const raw = window.localStorage.getItem('footballPicks');
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (_) { return []; }
+  });
   const [footballBoardSearch, setFootballBoardSearch] = useState('');
   const [footballBoardSort, setFootballBoardSort] = useState({ col: 'vbd', dir: 'desc' });
   const [footballEngine, setFootballEngine] = useState(null);
@@ -303,10 +312,51 @@ export default function App() {
     return null;
   };
 
+  // Derived from footballPicks for backward-compat with read sites.
+  const footballDraftedIds = footballPicks.map(p => p.playerId);
+
+  // Add a football pick — auto-assigns it to whichever team is on the clock
+  // based on snake order. Idempotent: ignores duplicate player IDs.
+  const addFootballPick = (playerId) => {
+    setFootballPicks(prev => {
+      if (prev.some(p => p.playerId === playerId)) return prev;
+      const overall = prev.length + 1;
+      const teamSlot = calcTeamForPick(overall, footballTeamSize);
+      return [...prev, { playerId, teamSlot, overall }];
+    });
+  };
+
+  // Remove a football pick. Reassigns teamSlot for picks that came after,
+  // since snake order shifts when a pick is undone.
+  const removeFootballPick = (playerId) => {
+    setFootballPicks(prev => {
+      const filtered = prev.filter(p => p.playerId !== playerId);
+      return filtered.map((p, i) => ({
+        ...p,
+        overall: i + 1,
+        teamSlot: calcTeamForPick(i + 1, footballTeamSize),
+      }));
+    });
+  };
+
   // Persist sport selection
   useEffect(() => {
     try { window.localStorage.setItem('sport', sport); } catch (_) {}
   }, [sport]);
+
+  // Persist football picks
+  useEffect(() => {
+    try { window.localStorage.setItem('footballPicks', JSON.stringify(footballPicks)); } catch (_) {}
+  }, [footballPicks]);
+
+  // Reassign snake slots whenever team size changes
+  useEffect(() => {
+    setFootballPicks(prev => prev.map((p, i) => ({
+      ...p,
+      teamSlot: calcTeamForPick(i + 1, footballTeamSize),
+    })));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [footballTeamSize]);
 
   // Persist football draft settings
   useEffect(() => {
@@ -573,7 +623,7 @@ export default function App() {
               setSport(newSport);
               setActiveTab('draft');
               setDraftState(null);
-              setFootballDraftedIds([]);
+              setFootballPicks([]);
               setFootballEngine(null);
               setFootballPlayers(null);
               if (newSport !== 'football') {
@@ -595,6 +645,7 @@ export default function App() {
           { id: 'recs',    label: '🎯 My Picks' },
           { id: 'keepers', label: '🔒 Keepers (optional)' },
           { id: 'drafted', label: '📜 Drafted' },
+          { id: 'trade',   label: '🔄 Trade Analyzer' },
           { id: 'settings', label: '⚙️ Scoring/Settings' },
         ].map(({ id, label }) => (
           <button
@@ -660,7 +711,17 @@ export default function App() {
               <div style={{padding:'8px 14px',background: isMyTurn ? '#f0fff4' : '#f7fafc',border:`1px solid ${isMyTurn ? '#9ae6b4' : '#e2e8f0'}`,borderRadius:8,marginBottom:12,display:'flex',gap:16,flexWrap:'wrap',alignItems:'center',fontSize:'0.88em'}}>
                 <span>📍 <strong>Overall pick:</strong> #{currentOverallPick}</span>
                 <span>🕐 <strong>On the clock:</strong> Team {onClockSlot}{isMyTurn ? ' (You!)' : ''}</span>
-                <span>🎯 <strong>Your slot:</strong> #{footballTeamPos} of {footballTeamSize}</span>
+                <span style={{display:'flex',alignItems:'center',gap:6}}>
+                  🎯 <strong>Your slot:</strong>
+                  <select value={footballTeamPos}
+                    onChange={e => setFootballTeamPos(Math.min(Math.max(1, Number(e.target.value)), footballTeamSize))}
+                    style={{padding:'2px 6px',borderRadius:4,border:'1px solid #cbd5e0',fontSize:'0.9em'}}>
+                    {Array.from({length: footballTeamSize}, (_, i) => i + 1).map(n =>
+                      <option key={n} value={n}>#{n}</option>
+                    )}
+                  </select>
+                  <span style={{color:'#718096'}}>of {footballTeamSize}</span>
+                </span>
                 {myNext && <span>⏭ <strong>Your next pick:</strong> #{myNext}</span>}
                 {isMyTurn && <span style={{color:'#276749',fontWeight:700}}>✅ You're on the clock!</span>}
               </div>
@@ -727,10 +788,14 @@ export default function App() {
                       {sortHeader('vbd', 'VBD', 'Value Over Replacement — positional scarcity-adjusted rank')}
                       {sortHeader('pts', 'Proj Pts', 'Projected fantasy points')}
                       {sortHeader('adp', 'ADP', 'Average Draft Position — click to sort by when players typically go')}
+                      <th title="Composite rank from FantasyPros, ESPN, and CBS — lower is better">Consensus</th>
                       <th></th>
                     </tr></thead>
                     <tbody>
-                      {rows.map((p, i) => (
+                      {rows.map((p, i) => {
+                        const cr = p.nextGen?.compositeRank;
+                        const sc = p.nextGen?.sourceCount ?? 0;
+                        return (
                         <tr key={p.id}>
                           <td className="pick-num">#{i+1}</td>
                           <td><strong>{p.name}</strong></td>
@@ -742,14 +807,23 @@ export default function App() {
                           <td style={{fontWeight:600,color: footballBoardSort.col === 'vbd' ? '#2b6cb0' : undefined}}>{p.vbd != null ? p.vbd.toFixed(1) : '—'}</td>
                           <td style={{fontWeight: footballBoardSort.col === 'pts' ? 600 : undefined}}>{p.projections.fantasyPoints.toFixed(1)}</td>
                           <td style={{fontWeight: footballBoardSort.col === 'adp' ? 600 : undefined}}>{p.adp ?? '—'}</td>
+                          <td title={`Sources: ${sc}/3 (FP/ESPN/CBS)`}>
+                            {cr ? <>
+                              <strong>{cr.toFixed(1)}</strong>
+                              <span style={{marginLeft:4,fontSize:'0.7em',color: sc >= 3 ? '#38a169' : sc === 2 ? '#dd6b20' : '#a0aec0'}}>
+                                {'●'.repeat(sc)}{'○'.repeat(Math.max(0, 3 - sc))}
+                              </span>
+                            </> : '—'}
+                          </td>
                           <td>
                             <button className="btn-primary" style={{padding:'4px 10px',fontSize:'0.85em'}}
-                              onClick={() => { setFootballDraftedIds(ids => [...ids, p.id]); setFootballBoardSearch(''); }}>
+                              onClick={() => { addFootballPick(p.id); setFootballBoardSearch(''); }}>
                               Draft
                             </button>
                           </td>
                         </tr>
-                      ))}
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -787,7 +861,7 @@ export default function App() {
                           {extraCol && <span style={{color:'#38a169'}}>{extraCol(p)}</span>}
                           <span>{p.projections.fantasyPoints.toFixed(1)} pts</span>
                           <button className="btn-primary" style={{padding:'2px 8px',fontSize:'0.8em'}}
-                            onClick={() => setFootballDraftedIds(ids => [...ids, p.id])}>
+                            onClick={() => addFootballPick(p.id)}>
                             Draft
                           </button>
                         </span>
@@ -809,7 +883,7 @@ export default function App() {
                       <strong>{p.name}</strong> <span style={{color:'#718096'}}>{p.team}</span>{' '}
                       <span style={{color:'#2d3748'}}>{p.projections.fantasyPoints.toFixed(1)} pts</span>{' '}
                       <button className="btn-primary" style={{padding:'2px 6px',fontSize:'0.78em',marginLeft:4}}
-                        onClick={() => setFootballDraftedIds(ids => [...ids, p.id])}>+</button>
+                        onClick={() => addFootballPick(p.id)}>+</button>
                     </div>
                   ))}
                 </div>
@@ -824,15 +898,59 @@ export default function App() {
               : <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
                   {footballEngine.players
                     .filter(p => footballDraftedIds.includes(p.id))
-                    .map(p => (
+                    .map(p => {
+                      const pick = footballPicks.find(fp => fp.playerId === p.id);
+                      const teamLabel = pick ? `T${pick.teamSlot}` : '?';
+                      return (
                       <span key={p.id} style={{background:'#fed7d7',borderRadius:4,padding:'3px 8px',fontSize:'0.82em'}}>
+                        <span className="badge" style={{background:'#4a5568'}}>{teamLabel}</span>
                         <span className="badge">{p.position}</span> {p.name}
                         <button style={{marginLeft:4,background:'none',border:'none',cursor:'pointer',color:'#c53030'}}
-                          onClick={() => setFootballDraftedIds(ids => ids.filter(id => id !== p.id))}>✕</button>
+                          onClick={() => removeFootballPick(p.id)}>✕</button>
                       </span>
-                    ))}
+                      );
+                    })}
                 </div>
             }
+          </section>
+
+          {/* Per-team roster tracker — like baseball */}
+          <section className="card">
+            <h3>Team Rosters <span style={{fontSize:'0.85rem',fontWeight:400,color:'#b7791f'}}>— your team is highlighted ⭐</span></h3>
+            <div className="team-grid">
+              {Array.from({length: footballTeamSize}, (_, i) => i + 1)
+                .sort((a, b) => {
+                  if (a === footballTeamPos) return -1;
+                  if (b === footballTeamPos) return 1;
+                  return a - b;
+                })
+                .map(slot => {
+                  const isMine = slot === footballTeamPos;
+                  const currentOverallPick = footballPicks.length + 1;
+                  const onClock = calcTeamForPick(currentOverallPick, footballTeamSize) === slot;
+                  const teamPicks = footballPicks
+                    .filter(p => p.teamSlot === slot)
+                    .map(p => ({ pick: p, player: footballEngine.players.find(pl => pl.id === p.playerId) }))
+                    .filter(x => x.player);
+                  return (
+                    <div key={slot} className={`team-card${onClock ? ' on-clock' : ''}${isMine ? ' my-team' : ''}`}>
+                      <h4>
+                        {isMine ? '⭐ ' : ''}{onClock && '🕐 '}Team {slot}{isMine ? ' (You)' : ''}
+                        {isMine && <span className="my-team-badge">YOUR TEAM</span>}
+                        <span className="pick-count">({teamPicks.length} picks)</span>
+                      </h4>
+                      {teamPicks.length === 0
+                        ? <p className="empty-roster">—</p>
+                        : <ol>{teamPicks.map(({player}) => (
+                            <li key={player.id}>
+                              <span className="badge">{player.position}</span> {player.name}
+                            </li>
+                          ))}</ol>
+                      }
+                    </div>
+                  );
+                })}
+            </div>
           </section>
         </div>
       )}
@@ -935,13 +1053,23 @@ export default function App() {
           {/* Team Tracker */}
           {draftState?.teams?.length > 0 && (
             <section className="card">
-              <h3>Team Rosters</h3>
+              <h3>Team Rosters {myTeamId && <span style={{fontSize:'0.85rem',fontWeight:400,color:'#b7791f'}}>— your team is highlighted ⭐</span>}</h3>
               <div className="team-grid">
-                {draftState.teams.map(team => (
+                {[...draftState.teams]
+                  .sort((a, b) => {
+                    if (a.id === myTeamId) return -1;
+                    if (b.id === myTeamId) return 1;
+                    return 0;
+                  })
+                  .map(team => {
+                  const isMine = team.id === myTeamId;
+                  const onClock = currentTeam?.id === team.id;
+                  return (
                   <div key={team.id}
-                    className={`team-card${currentTeam?.id === team.id ? ' on-clock' : ''}`}>
+                    className={`team-card${onClock ? ' on-clock' : ''}${isMine ? ' my-team' : ''}`}>
                     <h4>
-                      {currentTeam?.id === team.id && '🕐 '}{team.name}
+                      {isMine ? '⭐ ' : ''}{onClock && '🕐 '}{team.name}
+                      {isMine && <span className="my-team-badge">YOUR TEAM</span>}
                       <span className="pick-count">({team.roster.length} picks)</span>
                     </h4>
                     {team.roster.length === 0
@@ -954,7 +1082,8 @@ export default function App() {
                         ))}</ol>
                     }
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </section>
           )}
@@ -974,8 +1103,12 @@ export default function App() {
                 const isMyTurn = onClockSlot === footballTeamPos;
                 const myNextPick = calcNextSnakePick(currentOverallPick + 1, footballTeamPos, footballTeamSize);
 
-                // Build roster slots: assign drafted players to position slots greedily
-                const drafted = footballEngine.players.filter(p => footballDraftedIds.includes(p.id));
+                // Build roster slots: assign drafted players to position slots greedily.
+                // Filter by team slot — picks for OTHER teams must not show up on my roster.
+                const myPlayerIds = new Set(
+                  footballPicks.filter(p => p.teamSlot === footballTeamPos).map(p => p.playerId)
+                );
+                const drafted = footballEngine.players.filter(p => myPlayerIds.has(p.id));
                 const byPos = {};
                 drafted.forEach(p => { byPos[p.position] = [...(byPos[p.position] || []), p]; });
                 const req = sportConfig.rosterRequirements;
@@ -1025,7 +1158,7 @@ export default function App() {
                               <td>{slot.player ? slot.player.projections.fantasyPoints.toFixed(0) : '—'}</td>
                               <td>{slot.player && (
                                 <button style={{background:'none',border:'none',cursor:'pointer',color:'#c53030',fontSize:'0.85em'}}
-                                  onClick={() => setFootballDraftedIds(ids => ids.filter(id => id !== slot.player.id))}>✕</button>
+                                  onClick={() => removeFootballPick(slot.player.id)}>✕</button>
                               )}</td>
                             </tr>
                           ))}
@@ -1037,7 +1170,7 @@ export default function App() {
                               <td>{p.projections.fantasyPoints.toFixed(0)}</td>
                               <td>
                                 <button style={{background:'none',border:'none',cursor:'pointer',color:'#c53030',fontSize:'0.85em'}}
-                                  onClick={() => setFootballDraftedIds(ids => ids.filter(id => id !== p.id))}>✕</button>
+                                  onClick={() => removeFootballPick(p.id)}>✕</button>
                               </td>
                             </tr>
                           ))}
@@ -1065,7 +1198,7 @@ export default function App() {
                                   <button className="btn-primary" style={{padding:'4px 10px',fontSize:'0.85em'}}
                                     disabled={!isMyTurn}
                                     title={!isMyTurn ? `Waiting for Team ${onClockSlot} to pick` : 'Draft this player'}
-                                    onClick={() => setFootballDraftedIds(ids => [...ids, p.id])}>
+                                    onClick={() => addFootballPick(p.id)}>
                                     Draft
                                   </button>
                                 </td>
@@ -1090,7 +1223,7 @@ export default function App() {
                         <span style={{color:'#718096'}}>{p.team}</span>{' '}
                         <span style={{color:'#e53e3e',fontWeight:600}}>ADP {p.adp}</span>
                         <button className="btn-primary" style={{marginLeft:6,padding:'2px 8px',fontSize:'0.78em'}}
-                          onClick={() => setFootballDraftedIds(ids => [...ids, p.id])}>Draft</button>
+                          onClick={() => addFootballPick(p.id)}>Draft</button>
                       </div>
                     ))}
                   </div>
@@ -1390,6 +1523,19 @@ export default function App() {
             </>
           )}
         </div>
+      )}
+
+      {/* ── TRADE ANALYZER TAB ───────────────────────────────────────────── */}
+      {activeTab === 'trade' && (
+        <TradeAnalyzer
+          sport={sport}
+          availablePlayers={
+            isFootball(sport)
+              ? (footballEngine?.players ?? [])
+              : (draftState?.availablePlayers ?? [])
+          }
+          searchPlayers={isFootball(sport) ? null : searchPlayers}
+        />
       )}
 
       {/* ── SETTINGS TAB ────────────────────────────────────────────────── */}

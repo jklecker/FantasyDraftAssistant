@@ -25,15 +25,21 @@ public class NflDataMergeService {
 
     @Autowired private NflPlayerService   sleeperSvc;
     @Autowired private FantasyProsService fpSvc;
+    @Autowired private EspnAdpService     espnSvc;
+    @Autowired private CbsRankingsService cbsSvc;
 
     public List<Player> getMergedPlayers(String scoring) {
         List<NflPlayerService.SleeperPlayer>  sleeperPlayers = sleeperSvc.getPlayers();
         List<FantasyProsService.FpRanking>    rankings       = fpSvc.getRankings(scoring);
         List<FantasyProsService.FpProjection> projections    = fpSvc.getProjections(scoring);
+        List<EspnAdpService.EspnPlayer>       espnRankings   = espnSvc.getRankings(scoring);
+        List<CbsRankingsService.CbsPlayer>    cbsRankings    = cbsSvc.getRankings(scoring);
 
         // Index FP data by normalized name
         Map<String, FantasyProsService.FpRanking>    rankMap = indexByName(rankings,   r -> r.name);
         Map<String, FantasyProsService.FpProjection> projMap = indexByName(projections, p -> p.name);
+        Map<String, EspnAdpService.EspnPlayer>       espnMap = indexByName(espnRankings, e -> e.name);
+        Map<String, CbsRankingsService.CbsPlayer>    cbsMap  = indexByName(cbsRankings,  c -> c.name);
 
         // Secondary DST index: "san francisco 49ers" → DST entry keyed by "san francisco 49ers dst"
         Map<String, FantasyProsService.FpRanking> dstRankMap = new LinkedHashMap<>();
@@ -68,6 +74,11 @@ public class NflDataMergeService {
             FantasyProsService.FpProjection proj = findBest(sp.fullName, projMap);
             if (proj != null) attachProjection(p, proj);
 
+            // Composite rank: average across available sources (FP, ESPN, CBS).
+            EspnAdpService.EspnPlayer    eRank = findBest(sp.fullName, espnMap);
+            CbsRankingsService.CbsPlayer cRank = findBest(sp.fullName, cbsMap);
+            attachComposite(p, rank, eRank, cRank);
+
             result.add(p);
             addedKeys.add(key);
         }
@@ -86,12 +97,20 @@ public class NflDataMergeService {
             FantasyProsService.FpProjection proj = findBest(rank.name, projMap);
             if (proj != null) attachProjection(p, proj);
 
+            EspnAdpService.EspnPlayer    eRank = findBest(rank.name, espnMap);
+            CbsRankingsService.CbsPlayer cRank = findBest(rank.name, cbsMap);
+            attachComposite(p, rank, eRank, cRank);
+
             result.add(p);
             addedKeys.add(key);
         }
 
-        // Sort by ADP ascending (nulls last)
-        result.sort(Comparator.comparingDouble(p -> p.getAdp() != null ? p.getAdp() : 9999));
+        // Sort by composite rank when available, else ADP (nulls last in both cases).
+        result.sort(Comparator.comparingDouble(p -> {
+            Map<String, Double> ng = p.getNextGen();
+            if (ng != null && ng.get("compositeRank") != null) return ng.get("compositeRank");
+            return p.getAdp() != null ? p.getAdp() : 9999;
+        }));
 
         // Assign overall + per-position ranks after sort
         Map<String, Integer> posCounters = new HashMap<>();
@@ -123,6 +142,30 @@ public class NflDataMergeService {
         p.setStats(proj.stats);
         Map<String, Double> ng = p.getNextGen() != null ? new HashMap<>(p.getNextGen()) : new HashMap<>();
         ng.put("projectedPoints", proj.fantasyPoints);
+        p.setNextGen(ng);
+    }
+
+    /**
+     * Composite rank = mean of per-source ranks (FantasyPros ECR, ESPN ADP, CBS).
+     * Stored on the Player's nextGen map alongside the per-source ranks and a count
+     * of contributing sources so the UI can show a "consensus confidence" indicator.
+     */
+    private void attachComposite(Player p,
+                                 FantasyProsService.FpRanking fp,
+                                 EspnAdpService.EspnPlayer espn,
+                                 CbsRankingsService.CbsPlayer cbs) {
+        List<Double> ranks = new ArrayList<>();
+        Map<String, Double> ng = p.getNextGen() != null ? new HashMap<>(p.getNextGen()) : new HashMap<>();
+
+        if (fp != null)   { ranks.add((double) fp.rank);   ng.put("fpRank",   (double) fp.rank); }
+        if (espn != null) { ranks.add(espn.adp);           ng.put("espnAdp",  espn.adp); }
+        if (cbs != null)  { ranks.add((double) cbs.rank);  ng.put("cbsRank",  (double) cbs.rank); }
+
+        if (!ranks.isEmpty()) {
+            double mean = ranks.stream().mapToDouble(Double::doubleValue).average().orElse(0);
+            ng.put("compositeRank",  mean);
+            ng.put("sourceCount",    (double) ranks.size());
+        }
         p.setNextGen(ng);
     }
 

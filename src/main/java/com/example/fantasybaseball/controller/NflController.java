@@ -1,6 +1,8 @@
 package com.example.fantasybaseball.controller;
 
 import com.example.fantasybaseball.model.Player;
+import com.example.fantasybaseball.service.CbsRankingsService;
+import com.example.fantasybaseball.service.EspnAdpService;
 import com.example.fantasybaseball.service.FantasyProsService;
 import com.example.fantasybaseball.service.NflDataMergeService;
 import com.example.fantasybaseball.service.NflPlayerService;
@@ -18,6 +20,8 @@ public class NflController {
     @Autowired private NflDataMergeService mergeService;
     @Autowired private NflPlayerService    sleeperService;
     @Autowired private FantasyProsService  fpService;
+    @Autowired private EspnAdpService      espnService;
+    @Autowired private CbsRankingsService  cbsService;
 
     /**
      * GET /nfl/players?scoring=ppr|standard|half_ppr
@@ -36,6 +40,8 @@ public class NflController {
     public ResponseEntity<Map<String, String>> refresh() {
         sleeperService.invalidateCache();
         fpService.invalidateCache();
+        espnService.invalidateCache();
+        cbsService.invalidateCache();
         return ResponseEntity.ok(Map.of("status", "Cache cleared. Next request will re-fetch."));
     }
 
@@ -47,7 +53,9 @@ public class NflController {
         return ResponseEntity.ok(Map.of(
                 "sleeperPlayerCount", sleeperService.getPlayers().size(),
                 "fpRankingsPpr",      fpService.getRankings("ppr").size(),
-                "fpProjectionsPpr",   fpService.getProjections("ppr").size()
+                "fpProjectionsPpr",   fpService.getProjections("ppr").size(),
+                "espnRankingsPpr",    espnService.getRankings("ppr").size(),
+                "cbsRankingsPpr",     cbsService.getRankings("ppr").size()
         ));
     }
 }

@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: fantasy-baseball-draft-assistant
+    name: fantasy-draft-assistant
     env: docker
     plan: free
     branch: main

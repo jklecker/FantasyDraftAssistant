@@ -1,1 +1,1 @@
-rootProject.name = "FantasyBaseballDraftAssistant"
+rootProject.name = "FantasyDraftAssistant"

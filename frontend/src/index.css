@@ -219,6 +219,24 @@ body {
   padding: 12px 14px;
 }
 .team-card.on-clock { border-color: #4299e1; background: #ebf8ff; }
+.team-card.my-team {
+  border-color: #d69e2e;
+  border-width: 2px;
+  background: #fffbeb;
+  box-shadow: 0 2px 8px rgba(214, 158, 46, 0.25);
+}
+.team-card.my-team.on-clock { background: linear-gradient(135deg, #fffbeb 0%, #ebf8ff 100%); }
+.my-team-badge {
+  display: inline-block;
+  background: #d69e2e;
+  color: #fff;
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  margin-left: 6px;
+  vertical-align: middle;
+}
 .team-card h4 { margin: 0 0 8px; font-size: 0.9rem; color: #2d3748; }
 .team-card ol { margin: 0; padding-left: 18px; font-size: 0.82rem; line-height: 1.7; }
 .pick-count { font-weight: 400; color: #718096; font-size: 0.8rem; margin-left: 4px; }
