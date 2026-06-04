@@ -37,6 +37,11 @@ public class DraftService {
         return draftState != null;
     }
 
+    /** Wipe all draft state so a fresh draft can be started. */
+    public synchronized void resetDraft() {
+        draftState = null;
+    }
+
     /**
      * Returns the Team currently on the clock based on the snake-draft order.
      * Odd rounds → ascending order. Even rounds → descending order.
@@ -189,5 +194,44 @@ public class DraftService {
             throw new IllegalStateException("Draft not initialized.");
         }
         draftState.setActiveScoringPreset(presetKey);
+    }
+
+    /**
+     * Undo the most recently submitted pick.
+     * Removes the player from the drafted list and their team's roster,
+     * returns them to the available pool, and reverses the pick counter.
+     *
+     * @return the player whose pick was undone
+     */
+    public synchronized Player undoLastPick() {
+        if (draftState == null) throw new IllegalStateException("Draft not initialized.");
+        List<Player> drafted = draftState.getDraftedPlayers();
+        if (drafted.isEmpty()) throw new IllegalStateException("No picks to undo.");
+
+        Player last = drafted.remove(drafted.size() - 1);
+
+        // Return to top of available pool so they're visible immediately
+        draftState.getAvailablePlayers().add(0, last);
+
+        // Remove from whichever team's roster has them
+        draftState.getTeams().forEach(t -> t.getRoster().remove(last));
+
+        reverseDraft();
+        return last;
+    }
+
+    /** Reverse the pick counter by one slot, handling round boundaries. */
+    private void reverseDraft() {
+        int numTeams = draftState.getTeams().size();
+        int pick  = draftState.getCurrentPick();
+        int round = draftState.getRound();
+        if (pick <= 1) {
+            if (round > 1) {
+                draftState.setRound(round - 1);
+                draftState.setCurrentPick(numTeams);
+            }
+        } else {
+            draftState.setCurrentPick(pick - 1);
+        }
     }
 }

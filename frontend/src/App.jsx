@@ -7,6 +7,7 @@ import { FOOTBALL_PLAYERS } from './data/footballPlayers.js';
 import { runDraftEngine } from './utils/draftEngine.js';
 import { calculateFantasyPoints } from './utils/calculateFantasyPoints.js';
 import TradeAnalyzer from './TradeAnalyzer.jsx';
+import FantasyChat from './FantasyChat.jsx';
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
@@ -154,6 +155,24 @@ export default function App() {
   // Keep-alive
   const [lastPing, setLastPing] = useState(null);
   const [pinging, setPinging]   = useState(false);
+
+  // Draft timer
+  const [timerSeconds, setTimerSeconds] = useState(120);
+  const [timerActive, setTimerActive]   = useState(false);
+  const [timerLeft,   setTimerLeft]     = useState(120);
+  const timerRef = useRef(null);
+
+  // Mobile More-menu
+  const [showMoreMenu, setShowMoreMenu] = useState(false);
+
+  // Toast notifications (replaces banner for transient feedback)
+  const [toastMsg, setToastMsg] = useState('');
+  const toastTimeoutRef = useRef(null);
+  const showToast = (msg) => {
+    setToastMsg(msg);
+    if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
+    toastTimeoutRef.current = setTimeout(() => setToastMsg(''), 3500);
+  };
 
   // Draft pick form
   const [pickSearch, setPickSearch]   = useState('');
@@ -316,10 +335,14 @@ export default function App() {
   const footballDraftedIds = footballPicks.map(p => p.playerId);
 
   // Add a football pick — auto-assigns it to whichever team is on the clock
-  // based on snake order. Idempotent: ignores duplicate player IDs.
+  // based on snake order. Toasts on duplicate player.
   const addFootballPick = (playerId) => {
     setFootballPicks(prev => {
-      if (prev.some(p => p.playerId === playerId)) return prev;
+      if (prev.some(p => p.playerId === playerId)) {
+        const name = footballEngine?.players?.find(p => p.id === playerId)?.name ?? 'That player';
+        showToast(`⚠️ ${name} is already drafted — pick someone else.`);
+        return prev;
+      }
       const overall = prev.length + 1;
       const teamSlot = calcTeamForPick(overall, footballTeamSize);
       return [...prev, { playerId, teamSlot, overall }];
@@ -470,6 +493,33 @@ export default function App() {
     return () => clearInterval(id);
   }, [ping]);
 
+  // ── draft timer ──────────────────────────────────────────────────────────
+
+  const resetTimer = useCallback(() => {
+    setTimerLeft(timerSeconds);
+    setTimerActive(false);
+    if (timerRef.current) clearInterval(timerRef.current);
+  }, [timerSeconds]);
+
+  const startTimer = useCallback(() => {
+    setTimerLeft(timerSeconds);
+    setTimerActive(true);
+  }, [timerSeconds]);
+
+  useEffect(() => {
+    if (!timerActive) { if (timerRef.current) clearInterval(timerRef.current); return; }
+    timerRef.current = setInterval(() => {
+      setTimerLeft(prev => {
+        if (prev <= 1) { clearInterval(timerRef.current); setTimerActive(false); showToast('⏰ Time\'s up!'); return 0; }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(timerRef.current);
+  }, [timerActive]);
+
+  // Reset timer whenever the pick advances (currentTeam changes)
+  useEffect(() => { resetTimer(); }, [currentTeam, resetTimer]);
+
   // ── player search ────────────────────────────────────────────────────────
   // Uses the local Fuse.js index (instant + fuzzy) when a draft is in progress;
   // falls back to the backend API when no local index is available.
@@ -498,10 +548,8 @@ export default function App() {
     try {
       let data;
       if (playerToPick?.id) {
-        // Preferred: use the integer player ID (exact match, fast)
         data = await apiFetch(`/draft/pick?playerId=${playerToPick.id}`, { method: 'POST' });
       } else if (pickSearch.trim()) {
-        // Fallback: let the backend fuzzy-match by name
         data = await apiFetch(
           `/draft/pick?playerName=${encodeURIComponent(pickSearch.trim())}`,
           { method: 'POST' }
@@ -510,14 +558,20 @@ export default function App() {
         setErrorMsg('Type a player name first.');
         return;
       }
-      setStatusMsg(`✅ ${playerToPick?.name ?? pickSearch} → ${data.pickedByTeam}  (Rd ${data.round})`);
+      showToast(`✅ ${playerToPick?.name ?? pickSearch} → ${data.pickedByTeam}  (Rd ${data.round})`);
+      setStatusMsg('');
       setSelectedPick(null);
       setPickSearch('');
       setPickResults([]);
+      resetTimer();
       await loadState();
       await loadCurrentTeam();
     } catch (e) {
-      setErrorMsg(`Pick failed: ${e.message}`);
+      // Duplicate / already-drafted player gives a 400 from the backend
+      const isDuplicate = e.message?.toLowerCase().includes('not available');
+      setErrorMsg(isDuplicate
+        ? `⚠️ ${playerToPick?.name ?? 'That player'} was already drafted — pick someone else.`
+        : `Pick failed: ${e.message}`);
     }
   };
 
@@ -526,11 +580,30 @@ export default function App() {
     setErrorMsg('');
     try {
       const data = await apiFetch(`/draft/pick?playerId=${player.id}`, { method: 'POST' });
-      setStatusMsg(`✅ ${player.name} → ${data.pickedByTeam}  (Rd ${data.round})`);
+      showToast(`✅ ${player.name} → ${data.pickedByTeam}  (Rd ${data.round})`);
+      setStatusMsg('');
+      resetTimer();
       await loadState();
       await loadCurrentTeam();
     } catch (e) {
-      setErrorMsg(`Pick failed: ${e.message}`);
+      const isDuplicate = e.message?.toLowerCase().includes('not available');
+      setErrorMsg(isDuplicate
+        ? `⚠️ ${player.name} was already drafted.`
+        : `Pick failed: ${e.message}`);
+    }
+  };
+
+  // Undo the last baseball pick.
+  const handleUndo = async () => {
+    setErrorMsg('');
+    try {
+      const data = await apiFetch('/draft/undo', { method: 'POST' });
+      showToast(`↩️ Undid pick: ${data.undonePlayer}`);
+      setStatusMsg('');
+      await loadState();
+      await loadCurrentTeam();
+    } catch (e) {
+      setErrorMsg(`Undo failed: ${e.message}`);
     }
   };
 
@@ -608,13 +681,37 @@ export default function App() {
   const myTeam = draftState?.teams?.find(t => t.id === myTeamId) || null;
   const { keepers: draftedKeepers, picks: draftedPicks } = buildDraftBoard(draftState);
 
+  // Baseball category strength helper — returns which H2H cats a player primarily helps
+  const baseballCatStrength = (p) => {
+    if (!p) return [];
+    const isPitcher = Number(stat(p,'IP','ip')) > 0 || p.position === 'SP' || p.position === 'RP';
+    if (isPitcher) {
+      const cats = [];
+      if (Number(stat(p,'SV','sv')) >= 15) cats.push('SV');
+      if (Number(stat(p,'W','w')) >= 8)  cats.push('W');
+      if (Number(stat(p,'pitchingK','pK')) >= 120) cats.push('K');
+      const era = Number(stat(p,'ERA','era'));
+      if (era > 0 && era < 3.5) cats.push('ERA');
+      const whip = Number(stat(p,'WHIP','whip'));
+      if (whip > 0 && whip < 1.2) cats.push('WHIP');
+      return cats;
+    }
+    const cats = [];
+    if (Number(stat(p,'HR','hr')) >= 25) cats.push('HR');
+    if (Number(stat(p,'RBI','rbi')) >= 80) cats.push('RBI');
+    if (Number(stat(p,'R','r')) >= 80)  cats.push('R');
+    if (Number(stat(p,'SB','sb')) >= 20) cats.push('SB');
+    if (Number(stat(p,'H','h')) >= 145)  cats.push('AVG');
+    return cats;
+  };
+
   // ─────────────────────────────────────────────────────────────────────────
 
   return (
     <div className="app">
       <header className="app-header">
         <h1>{sportConfig.emoji} Fantasy Draft Assistant</h1>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 6, flexWrap: 'wrap' }}>
           <label style={{ fontWeight: 600, color: '#e2e8f0', fontSize: '0.9em' }}>Sport:</label>
           <select
             value={sport}
@@ -636,6 +733,54 @@ export default function App() {
             <option value="baseball">⚾ Baseball</option>
             <option value="football">🏈 Football</option>
           </select>
+
+          <button
+            onClick={async () => {
+              const hasPicks = isFootball(sport)
+                ? footballPicks.length > 0
+                : (draftState?.draftedPlayers?.length ?? 0) > 0;
+              const msg = hasPicks
+                ? `Start a new draft? This will erase all ${isFootball(sport) ? footballPicks.length + ' picks' : draftState.draftedPlayers.length + ' picks and all keepers'}. This cannot be undone.`
+                : 'Start a new draft? This will reset all state.';
+              if (!window.confirm(msg)) return;
+
+              if (isFootball(sport)) {
+                setFootballPicks([]);
+                setFootballEngine(null);
+                try { window.localStorage.removeItem('footballPicks'); } catch (_) {}
+                showToast('🆕 New football draft started!');
+              } else {
+                try {
+                  await apiFetch('/draft/reset', { method: 'POST' });
+                  const state = await apiFetch(`/draft/auto-initialize?sport=${sport}`, { method: 'POST' });
+                  setDraftState(state);
+                  buildFuseIndex(state);
+                  setKeeperGrid(makeKeeperGrid(myTeamId));
+                  setRecs([]);
+                  setNeeds({});
+                  setMyRecBoard({ overall: [], pitchers: [], batters: [] });
+                  setPickSearch('');
+                  setPickResults([]);
+                  setSelectedPick(null);
+                  resetTimer();
+                  showToast('🆕 New baseball draft started!');
+                } catch (e) {
+                  setErrorMsg(`Reset failed: ${e.message}`);
+                }
+              }
+              setActiveTab('draft');
+              setStatusMsg('');
+              setErrorMsg('');
+            }}
+            style={{
+              padding: '4px 14px', borderRadius: 6, border: '1px solid #fc8181',
+              background: '#fff5f5', color: '#c53030', cursor: 'pointer',
+              fontSize: '0.85em', fontWeight: 600,
+            }}
+            title="Reset all picks and start a new draft"
+          >
+            🆕 New Draft
+          </button>
         </div>
       </header>
 
@@ -646,6 +791,7 @@ export default function App() {
           { id: 'keepers', label: '🔒 Keepers (optional)' },
           { id: 'drafted', label: '📜 Drafted' },
           { id: 'trade',   label: '🔄 Trade Analyzer' },
+          { id: 'chat',    label: '💬 Assistant' },
           { id: 'settings', label: '⚙️ Scoring/Settings' },
         ].map(({ id, label }) => (
           <button
@@ -680,6 +826,99 @@ export default function App() {
 
       {statusMsg && <div className="banner success" data-testid="status-msg">{statusMsg}</div>}
       {errorMsg  && <div className="banner error"   data-testid="error-msg">{errorMsg}</div>}
+      {toastMsg && <div className="toast-msg">{toastMsg}</div>}
+
+      {/* ── MOBILE BOTTOM NAV ─────────────────────────────────────────────── */}
+      {showMoreMenu && (
+        <>
+          <div className="more-sheet-backdrop" onClick={() => setShowMoreMenu(false)} />
+          <div className="more-sheet">
+            <h4>More</h4>
+            {[
+              { id: 'keepers',  icon: '🔒', label: 'Keepers',        desc: 'Optional' },
+              { id: 'trade',    icon: '🔄', label: 'Trade Analyzer',  desc: '' },
+              { id: 'settings', icon: '⚙️', label: 'Settings',        desc: '' },
+            ].map(({ id, icon, label, desc }) => (
+              <button
+                key={id}
+                className={`more-sheet-btn${activeTab === id ? ' active' : ''}`}
+                onClick={() => { setActiveTab(id); setShowMoreMenu(false); setErrorMsg(''); setStatusMsg(''); }}
+              >
+                <span className="sheet-icon">{icon}</span>
+                <span className="sheet-label">{label}</span>
+                {desc && <span className="sheet-desc">{desc}</span>}
+              </button>
+            ))}
+            <button
+              className="more-sheet-btn danger"
+              onClick={async () => {
+                setShowMoreMenu(false);
+                const hasPicks = isFootball(sport)
+                  ? footballPicks.length > 0
+                  : (draftState?.draftedPlayers?.length ?? 0) > 0;
+                const msg = hasPicks
+                  ? `Start a new draft? This will erase all picks. This cannot be undone.`
+                  : 'Start a new draft? This will reset all state.';
+                if (!window.confirm(msg)) return;
+                if (isFootball(sport)) {
+                  setFootballPicks([]);
+                  setFootballEngine(null);
+                  try { window.localStorage.removeItem('footballPicks'); } catch (_) {}
+                  showToast('🆕 New football draft started!');
+                } else {
+                  try {
+                    await apiFetch('/draft/reset', { method: 'POST' });
+                    const state = await apiFetch(`/draft/auto-initialize?sport=${sport}`, { method: 'POST' });
+                    setDraftState(state);
+                    buildFuseIndex(state);
+                    setKeeperGrid(makeKeeperGrid(myTeamId));
+                    setRecs([]);
+                    setNeeds({});
+                    setMyRecBoard({ overall: [], pitchers: [], batters: [] });
+                    setPickSearch('');
+                    setPickResults([]);
+                    setSelectedPick(null);
+                    resetTimer();
+                    showToast('🆕 New baseball draft started!');
+                  } catch (e) {
+                    setErrorMsg(`Reset failed: ${e.message}`);
+                  }
+                }
+                setActiveTab('draft');
+                setStatusMsg('');
+                setErrorMsg('');
+              }}
+            >
+              <span className="sheet-icon">🆕</span>
+              <span className="sheet-label">New Draft</span>
+            </button>
+          </div>
+        </>
+      )}
+      <nav className="bottom-nav" aria-label="Navigation">
+        {[
+          { id: 'draft',   icon: '📋', label: 'Board'   },
+          { id: 'recs',    icon: '🎯', label: 'My Picks' },
+          { id: 'drafted', icon: '📜', label: 'History'  },
+          { id: 'chat',    icon: '💬', label: 'Chat'     },
+        ].map(({ id, icon, label }) => (
+          <button
+            key={id}
+            className={`bottom-nav-btn${activeTab === id ? ' active' : ''}`}
+            onClick={() => { setActiveTab(id); setShowMoreMenu(false); setErrorMsg(''); setStatusMsg(''); }}
+          >
+            <span className="nav-icon">{icon}</span>
+            <span className="nav-label">{label}</span>
+          </button>
+        ))}
+        <button
+          className={`bottom-nav-btn${ ['keepers','trade','settings'].includes(activeTab) ? ' active' : ''}`}
+          onClick={() => setShowMoreMenu(m => !m)}
+        >
+          <span className="nav-icon">⋯</span>
+          <span className="nav-label">More</span>
+        </button>
+      </nav>
 
       {/* Keep-alive bar */}
       <div className="keepalive-bar" data-testid="keepalive-bar">
@@ -724,6 +963,19 @@ export default function App() {
                 </span>
                 {myNext && <span>⏭ <strong>Your next pick:</strong> #{myNext}</span>}
                 {isMyTurn && <span style={{color:'#276749',fontWeight:700}}>✅ You're on the clock!</span>}
+                {/* Timer */}
+                <span style={{display:'flex',alignItems:'center',gap:6,marginLeft:'auto'}}>
+                  <span style={{
+                    fontWeight:700,fontVariantNumeric:'tabular-nums',
+                    color: timerLeft<=15?'#c53030':timerLeft<=30?'#dd6b20':'#2d3748'
+                  }}>
+                    {String(Math.floor(timerLeft/60)).padStart(2,'0')}:{String(timerLeft%60).padStart(2,'0')}
+                  </span>
+                  {!timerActive
+                    ? <button onClick={startTimer} style={{padding:'2px 8px',borderRadius:5,border:'1px solid #9ae6b4',background:'#f0fff4',color:'#276749',cursor:'pointer',fontSize:'0.8em'}}>Start</button>
+                    : <button onClick={resetTimer} style={{padding:'2px 8px',borderRadius:5,border:'1px solid #feb2b2',background:'#fff5f5',color:'#c53030',cursor:'pointer',fontSize:'0.8em'}}>Reset</button>
+                  }
+                </span>
               </div>
             );
           })()}
@@ -789,6 +1041,7 @@ export default function App() {
                       {sortHeader('pts', 'Proj Pts', 'Projected fantasy points')}
                       {sortHeader('adp', 'ADP', 'Average Draft Position — click to sort by when players typically go')}
                       <th title="Composite rank from FantasyPros, ESPN, and CBS — lower is better">Consensus</th>
+                      <th>Bye / Status</th>
                       <th></th>
                     </tr></thead>
                     <tbody>
@@ -892,7 +1145,17 @@ export default function App() {
           ))}
 
           <section className="card">
-            <h4>Drafted Players ({footballDraftedIds.length})</h4>
+            <h4 style={{display:'flex',alignItems:'center',gap:10}}>
+              Drafted Players ({footballDraftedIds.length})
+              {footballDraftedIds.length > 0 && (
+                <button onClick={() => {
+                  const lastPick = footballPicks[footballPicks.length - 1];
+                  if (lastPick) { removeFootballPick(lastPick.playerId); showToast('↩️ Undid last pick'); }
+                }} style={{fontSize:'0.8em',padding:'3px 10px',borderRadius:6,border:'1px solid #e2e8f0',background:'#f7fafc',color:'#4a5568',cursor:'pointer',fontWeight:400}}>
+                  ↩ Undo Last
+                </button>
+              )}
+            </h4>
             {footballDraftedIds.length === 0
               ? <p className="hint">No players drafted yet.</p>
               : <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
@@ -978,6 +1241,32 @@ export default function App() {
                   ))}
                 </div>
               )}
+              {/* Draft timer */}
+              <div style={{display:'flex',alignItems:'center',gap:8,marginTop:8,flexWrap:'wrap'}}>
+                <span style={{
+                  fontSize:'1.3em',fontWeight:700,fontVariantNumeric:'tabular-nums',
+                  color: timerLeft <= 15 ? '#c53030' : timerLeft <= 30 ? '#dd6b20' : '#2d3748',
+                  minWidth: 42, textAlign:'center',
+                }}>
+                  {String(Math.floor(timerLeft/60)).padStart(2,'0')}:{String(timerLeft%60).padStart(2,'0')}
+                </span>
+                <input type="range" min={30} max={300} step={30} value={timerSeconds}
+                  onChange={e => { setTimerSeconds(Number(e.target.value)); resetTimer(); }}
+                  style={{width:80}} title={`${timerSeconds}s per pick`}
+                />
+                <span style={{fontSize:'0.78em',color:'#718096'}}>{timerSeconds}s</span>
+                {!timerActive
+                  ? <button onClick={startTimer} style={{padding:'3px 10px',borderRadius:6,border:'1px solid #9ae6b4',background:'#f0fff4',color:'#276749',cursor:'pointer',fontSize:'0.82em'}}>Start</button>
+                  : <button onClick={resetTimer} style={{padding:'3px 10px',borderRadius:6,border:'1px solid #feb2b2',background:'#fff5f5',color:'#c53030',cursor:'pointer',fontSize:'0.82em'}}>Reset</button>
+                }
+                {draftState.draftedPlayers?.length > 0 && (
+                  <button onClick={handleUndo}
+                    style={{marginLeft:8,padding:'3px 10px',borderRadius:6,border:'1px solid #e2e8f0',background:'#f7fafc',color:'#4a5568',cursor:'pointer',fontSize:'0.82em'}}
+                    title="Undo last pick">
+                    ↩ Undo
+                  </button>
+                )}
+              </div>
             </div>
           ) : (
             <p className="hint">Draft not initialized — POST /draft/initialize to start.</p>
@@ -1291,7 +1580,7 @@ export default function App() {
                     <table className="data-table">
                       <thead>
                         <tr>
-                          <th>#</th><th>Player</th><th>Pos</th><th>MLB</th><th>Projected Stats</th><th></th>
+                          <th>#</th><th>Player</th><th>Pos</th><th>MLB</th><th>Projected Stats</th><th>Cats</th><th></th>
                         </tr>
                       </thead>
                       <tbody>
@@ -1302,6 +1591,11 @@ export default function App() {
                             <td><span className="badge">{p.position}</span></td>
                             <td>{p.team}</td>
                             <td style={{ fontSize: '0.85em' }}>{overallProjection(p)}</td>
+                            <td style={{whiteSpace:'nowrap'}}>
+                              {baseballCatStrength(p).map(c => (
+                                <span key={c} style={{display:'inline-block',marginRight:3,padding:'1px 5px',borderRadius:4,fontSize:'0.72em',background:'#ebf8ff',color:'#2b6cb0',border:'1px solid #bee3f8',fontWeight:600}}>{c}</span>
+                              ))}
+                            </td>
                             <td>
                               <button className="btn-primary" style={{ padding: '4px 12px', fontSize: '0.85em' }} onClick={() => handlePickPlayer(p)}>
                                 Draft
@@ -1535,6 +1829,23 @@ export default function App() {
               : (draftState?.availablePlayers ?? [])
           }
           searchPlayers={isFootball(sport) ? null : searchPlayers}
+        />
+      )}
+
+      {/* ── CHAT TAB ────────────────────────────────────────────────────── */}
+      {activeTab === 'chat' && (
+        <FantasyChat
+          sport={sport}
+          myRoster={
+            isFootball(sport)
+              ? (footballEngine?.players?.filter(p => p.isDrafted) ?? [])
+              : (myTeam?.roster ?? [])
+          }
+          availablePlayers={
+            isFootball(sport)
+              ? (footballEngine?.players?.filter(p => !p.isDrafted) ?? [])
+              : (draftState?.availablePlayers ?? [])
+          }
         />
       )}
 

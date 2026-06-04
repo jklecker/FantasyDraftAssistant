@@ -45,9 +45,9 @@ function footballValue(p) {
   if (!p) return 0;
   const pts = num(p.projections?.fantasyPoints);
   const vbd = num(p.vbd);
-  // VBD already encodes positional scarcity. Total value = projected pts + VBD bonus.
-  // Without VBD (e.g. mock data), pts alone.
-  return pts + vbd;
+  // VBD already encodes positional scarcity — use it alone to avoid double-counting.
+  // Only fall back to raw pts when VBD is unavailable (e.g. non-normalized mock data).
+  return vbd > 0 ? vbd : pts;
 }
 
 export function playerValue(player, sport) {

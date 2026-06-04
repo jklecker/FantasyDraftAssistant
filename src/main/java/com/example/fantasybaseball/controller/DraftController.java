@@ -229,6 +229,36 @@ public class DraftController {
     }
 
     /**
+     * Reset the draft completely — wipes all picks, rosters, and keepers.
+     * The next call to /draft/initialize or /draft/auto-initialize starts fresh.
+     */
+    @PostMapping("/reset")
+    public ResponseEntity<Map<String, String>> reset() {
+        draftService.resetDraft();
+        return ResponseEntity.ok(Map.of("status", "reset", "message", "Draft cleared. Call /draft/initialize to start a new draft."));
+    }
+
+    /**
+     * Undo the last submitted pick: returns the player to the available pool,
+     * removes them from the team roster, and reverses the pick counter.
+     */
+    @PostMapping("/undo")
+    public ResponseEntity<Map<String, Object>> undoLastPick() {
+        requireInitialized();
+        try {
+            Player undone = draftService.undoLastPick();
+            DraftState state = draftService.getDraftState();
+            return ResponseEntity.ok(Map.of(
+                    "undonePlayer", undone.getName(),
+                    "round", state.getRound(),
+                    "currentPick", state.getCurrentPick()
+            ));
+        } catch (IllegalStateException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage());
+        }
+    }
+
+    /**
      * Load keepers before the draft. Each keeper is removed from the pool
      * and placed on the team's roster. Example body:
      * { "keepers": [{"teamName":"Team A","playerId":1,"round":2},...] }

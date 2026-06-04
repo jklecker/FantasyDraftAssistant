@@ -1,18 +1,110 @@
 import React, { useState, useMemo } from 'react';
 import { analyzeTrade, playerValue } from './utils/tradeAnalyzer.js';
 
-/**
- * Trade Analyzer component — sport-agnostic.
- *
- * @param {Object}   props
- * @param {string}   props.sport             'baseball' or 'football'
- * @param {Array}    props.availablePlayers  Pool of all players to pick from (with stats).
- *                                            For baseball: pass draftState players + your roster.
- *                                            For football: pass footballEngine.players (or all).
- * @param {Function} props.searchPlayers     async (query, setResults) => populates a list of matches.
- *                                            Used when availablePlayers isn't a full pool (baseball
- *                                            falls back to backend fuzzy search).
- */
+// ─── helpers ──────────────────────────────────────────────────────────────────
+
+/** Keeper cost: what ADP round a player costs to keep (1 round earlier than drafted). */
+function keeperCost(p) {
+  const adp = p.adp ?? p.rankings?.overall ?? null;
+  if (!adp) return null;
+  // Approximate draft round from ADP (12-team league)
+  return Math.max(1, Math.ceil(adp / 12) - 1);
+}
+
+/** Rough age risk label for RBs, WRs, TEs, QBs */
+function ageRisk(p) {
+  const age = p.age;
+  if (!age) return null;
+  const pos = p.position;
+  if (pos === 'RB') {
+    if (age >= 31) return { label: 'High age risk', color: '#c53030' };
+    if (age >= 28) return { label: 'Moderate age risk', color: '#c05621' };
+    if (age <= 24) return { label: 'Young — keeper value', color: '#276749' };
+  }
+  if (pos === 'WR' || pos === 'TE' || pos === 'QB') {
+    if (age >= 34) return { label: 'High age risk', color: '#c53030' };
+    if (age >= 31) return { label: 'Moderate age risk', color: '#c05621' };
+    if (age <= 24) return { label: 'Young — keeper value', color: '#276749' };
+  }
+  return null;
+}
+
+function PlayerCard({ p, sport, onRemove }) {
+  const val = playerValue(p, sport);
+  const risk = ageRisk(p);
+  const cost = keeperCost(p);
+
+  // Per-stat summary line
+  const statLine = (() => {
+    if (sport === 'football') {
+      const s = p.stats ?? {};
+      const pts = p.projections?.fantasyPoints;
+      if (p.position === 'QB') {
+        return `${s.passYards ?? 0} PaYd · ${s.passTD ?? 0} PaTD · ${s.rushYards ?? 0} RuYd · ${s.rushTD ?? 0} RuTD`;
+      }
+      if (p.position === 'RB') {
+        return `${s.rushYards ?? 0} RuYd · ${s.rushTD ?? 0} TD · ${s.receptions ?? 0} Rec · ${s.recYards ?? 0} ReYd`;
+      }
+      if (p.position === 'WR' || p.position === 'TE') {
+        return `${s.receptions ?? 0} Rec · ${s.recYards ?? 0} ReYd · ${s.recTD ?? 0} TD`;
+      }
+      return pts ? `${pts.toFixed(0)} proj pts` : '';
+    }
+    // Baseball
+    const s = p.stats ?? p;
+    const isPitcher = Number(s.IP ?? s.ip ?? 0) > 0 || p.position === 'SP' || p.position === 'RP';
+    if (isPitcher) {
+      return `${Number(s.IP ?? s.ip ?? 0).toFixed(0)} IP · ${s.W ?? s.w ?? 0} W · ${s.SV ?? s.sv ?? 0} SV · ${s.pitchingK ?? s.pK ?? 0} K · ERA ${Number(s.ERA ?? s.era ?? 0).toFixed(2)}`;
+    }
+    return `${s.HR ?? s.hr ?? 0} HR · ${s.RBI ?? s.rbi ?? 0} RBI · ${s.R ?? s.r ?? 0} R · ${s.SB ?? s.sb ?? 0} SB`;
+  })();
+
+  return (
+    <li style={{
+      background: '#fff',
+      borderRadius: 6,
+      padding: '8px 10px',
+      marginBottom: 6,
+      border: '1px solid #e2e8f0',
+      fontSize: '0.86em',
+    }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+        <div>
+          <span className="badge" style={{ marginRight: 6 }}>{p.position}</span>
+          <strong>{p.name}</strong>
+          <span style={{ color: '#718096', marginLeft: 5 }}>{p.team}</span>
+          {p.age && <span style={{ color: '#a0aec0', marginLeft: 6 }}>Age {p.age}</span>}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ color: '#4a5568', fontWeight: 700 }}>{val.toFixed(1)}</span>
+          <button
+            style={{ background: 'none', border: 'none', color: '#c53030', cursor: 'pointer', fontSize: '1em', padding: '0 2px' }}
+            onClick={onRemove}
+          >✕</button>
+        </div>
+      </div>
+      {statLine && <div style={{ color: '#718096', marginTop: 3, fontSize: '0.9em' }}>{statLine}</div>}
+      <div style={{ display: 'flex', gap: 10, marginTop: 4, flexWrap: 'wrap' }}>
+        {p.adp && (
+          <span style={{ fontSize: '0.82em', background: '#edf2f7', borderRadius: 4, padding: '1px 6px' }}>
+            ADP #{p.adp}
+          </span>
+        )}
+        {cost && (
+          <span style={{ fontSize: '0.82em', background: '#ebf8ff', borderRadius: 4, padding: '1px 6px', color: '#2b6cb0' }}>
+            Keeper: Rd {cost}
+          </span>
+        )}
+        {risk && (
+          <span style={{ fontSize: '0.82em', background: '#fff5f5', borderRadius: 4, padding: '1px 6px', color: risk.color }}>
+            {risk.label}
+          </span>
+        )}
+      </div>
+    </li>
+  );
+}
+
 export default function TradeAnalyzer({ sport, availablePlayers, searchPlayers }) {
   const [give, setGive] = useState([]);
   const [get,  setGet]  = useState([]);
@@ -43,7 +135,7 @@ export default function TradeAnalyzer({ sport, availablePlayers, searchPlayers }
   );
 
   const renderPicker = (label, items, setItems, search, setSearch, results, setResults, color) => (
-    <div style={{flex:1, minWidth:260, background:'#f7fafc', borderRadius:8, padding:14, border:`2px solid ${color}`}}>
+    <div style={{flex:1, minWidth:280, background:'#f7fafc', borderRadius:8, padding:14, border:`2px solid ${color}`}}>
       <h4 style={{margin:'0 0 8px', color}}>{label}</h4>
       <div style={{position:'relative', marginBottom:8}}>
         <input
@@ -65,7 +157,10 @@ export default function TradeAnalyzer({ sport, availablePlayers, searchPlayers }
                     }
                     setSearch(''); setResults([]);
                   }}>
-                <strong>{p.name}</strong> <span style={{color:'#718096'}}>{p.position} · {p.team}</span>
+                <strong>{p.name}</strong>{' '}
+                <span style={{color:'#718096'}}>{p.position} · {p.team}</span>
+                {p.age && <span style={{color:'#a0aec0'}}> · Age {p.age}</span>}
+                {p.adp && <span style={{color:'#4a5568'}}> · ADP #{p.adp}</span>}
               </li>
             ))}
           </ul>
@@ -75,20 +170,12 @@ export default function TradeAnalyzer({ sport, availablePlayers, searchPlayers }
         ? <p style={{color:'#a0aec0', fontSize:'0.85em', margin:'8px 0 0'}}>No players selected.</p>
         : <ul style={{listStyle:'none', padding:0, margin:0}}>
             {items.map(p => (
-              <li key={p.id ?? p.name}
-                  style={{display:'flex', justifyContent:'space-between', alignItems:'center',
-                          padding:'6px 8px', marginBottom:4, background:'#fff', borderRadius:4, fontSize:'0.88em'}}>
-                <span>
-                  <span className="badge" style={{marginRight:6}}>{p.position}</span>
-                  <strong>{p.name}</strong>{' '}
-                  <span style={{color:'#718096'}}>{p.team}</span>
-                </span>
-                <span style={{display:'flex', alignItems:'center', gap:8}}>
-                  <span style={{color:'#4a5568', fontWeight:600}}>{playerValue(p, sport).toFixed(1)}</span>
-                  <button style={{background:'none', border:'none', color:'#c53030', cursor:'pointer', fontSize:'1em'}}
-                          onClick={() => setItems(items.filter(x => (x.id ?? x.name) !== (p.id ?? p.name)))}>✕</button>
-                </span>
-              </li>
+              <PlayerCard
+                key={p.id ?? p.name}
+                p={p}
+                sport={sport}
+                onRemove={() => setItems(items.filter(x => (x.id ?? x.name) !== (p.id ?? p.name)))}
+              />
             ))}
           </ul>
       }
@@ -100,9 +187,9 @@ export default function TradeAnalyzer({ sport, availablePlayers, searchPlayers }
       <section className="card">
         <h3>🔄 Trade Analyzer</h3>
         <p className="hint" style={{marginTop:0}}>
-          Add players to each side. Value scoring uses{' '}
-          {sport === 'football' ? 'projected fantasy points + VBD (positional scarcity).'
-                                : 'weighted projected season stats (HR / R / RBI / SB / W / SV / K, minus ERA/WHIP penalties).'}
+          Search and add players to each side. Shows age, ADP, keeper cost, and projected value.{' '}
+          {sport === 'football' ? 'Football value = projected fantasy points + VBD (positional scarcity).'
+                                : 'Baseball value = weighted projected stats (HR/R/RBI/SB/W/SV/K minus ERA/WHIP penalties).'}
         </p>
 
         <div style={{display:'flex', gap:14, flexWrap:'wrap', marginBottom:18}}>
@@ -117,14 +204,27 @@ export default function TradeAnalyzer({ sport, availablePlayers, searchPlayers }
               <span style={{fontWeight:700, color:analysis.color, fontSize:'1.1em'}}>{analysis.recommendation}</span>
             </div>
             <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(140px, 1fr))', gap:10, marginBottom:12}}>
-              <Stat label="You give"   value={analysis.giveValue} />
-              <Stat label="You get"    value={analysis.getValue} />
-              <Stat label="Net change" value={(analysis.delta >= 0 ? '+' : '') + analysis.delta} color={analysis.color} />
+              <Stat label="You give"   value={analysis.giveValue.toFixed(1)} />
+              <Stat label="You get"    value={analysis.getValue.toFixed(1)} />
+              <Stat label="Net change" value={(analysis.delta >= 0 ? '+' : '') + analysis.delta.toFixed(1)} color={analysis.color} />
               <Stat label="% change"   value={(analysis.deltaPct >= 0 ? '+' : '') + analysis.deltaPct + '%'} color={analysis.color} />
             </div>
-            <p style={{margin:0, fontSize:'0.92em', color:'#2d3748'}}>
+            <p style={{margin:'0 0 10px', fontSize:'0.92em', color:'#2d3748'}}>
               {explain(analysis)}{analysis.quantityNote}
             </p>
+            {/* Age / keeper context */}
+            {buildKeeperNotes([...give, ...get]).length > 0 && (
+              <div style={{borderTop:'1px solid #e2e8f0', paddingTop:10, marginTop:4}}>
+                <strong style={{fontSize:'0.82em', color:'#4a5568', textTransform:'uppercase', letterSpacing:'0.05em'}}>
+                  Keeper / Age Notes
+                </strong>
+                <ul style={{margin:'6px 0 0', padding:'0 0 0 16px', fontSize:'0.88em', color:'#4a5568'}}>
+                  {buildKeeperNotes([...give, ...get]).map((note, i) => (
+                    <li key={i}>{note}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </div>
         )}
       </section>
@@ -141,20 +241,51 @@ function Stat({ label, value, color }) {
   );
 }
 
+/** Build age/keeper advisory notes for a combined player list. */
+function buildKeeperNotes(players) {
+  const notes = [];
+  for (const p of players) {
+    const risk = ageRisk(p);
+    const cost = keeperCost(p);
+    const adpRound = p.adp ? Math.ceil(p.adp / 12) : null;
+
+    if (risk?.color === '#c53030') {
+      notes.push(`${p.name} (${p.position}, Age ${p.age}): high age risk — production may drop sharply.`);
+    } else if (risk?.color === '#c05621') {
+      notes.push(`${p.name} (${p.position}, Age ${p.age}): moderate age concern, monitor into next season.`);
+    } else if (risk?.color === '#276749') {
+      notes.push(`${p.name} (${p.position}, Age ${p.age}): young asset — strong keeper/dynasty value.`);
+    }
+
+    if (cost && adpRound) {
+      const costStr = `keep in Rd ${cost} (drafted ~Rd ${adpRound})`;
+      if (cost <= 3 && adpRound >= 6) {
+        notes.push(`${p.name}: excellent keeper value — ${costStr}.`);
+      } else if (cost <= adpRound - 4) {
+        notes.push(`${p.name}: good keeper — ${costStr}.`);
+      } else if (cost >= adpRound) {
+        notes.push(`${p.name}: questionable keeper — ${costStr} costs as much as their draft value.`);
+      }
+    }
+  }
+  // Dedup
+  return [...new Set(notes)];
+}
+
 function explain(a) {
   const giveNames = a.breakdown.give.map(d => d.player.name).join(', ') || '(nothing)';
   const getNames  = a.breakdown.get.map(d => d.player.name).join(', ')  || '(nothing)';
   if (a.deltaPct >= 20) {
-    return `Sending ${giveNames} and receiving ${getNames} is a clear win — you gain ${a.delta} points of value (${a.deltaPct}% upgrade). Accept.`;
+    return `Sending ${giveNames} and receiving ${getNames} is a clear win — you gain ${a.delta.toFixed(1)} points of value (${a.deltaPct}% upgrade). `;
   }
   if (a.deltaPct >= 8) {
-    return `Modest win: ${getNames} grades out ${a.deltaPct}% above ${giveNames}. Worth accepting unless positional fit is a major issue.`;
+    return `Modest win: ${getNames} grades out ${a.deltaPct}% above ${giveNames}. Worth accepting unless positional fit is a major issue. `;
   }
   if (a.deltaPct >= -8) {
-    return `Roughly even (${a.deltaPct >= 0 ? '+' : ''}${a.deltaPct}%). Decide based on roster construction and need.`;
+    return `Roughly even (${a.deltaPct >= 0 ? '+' : ''}${a.deltaPct}%). Decide based on roster construction, age trajectory, and positional need. `;
   }
   if (a.deltaPct >= -20) {
-    return `Mild loss (${a.deltaPct}%). Decline unless ${getNames} fills a critical roster hole that ${giveNames} can't.`;
+    return `Mild loss (${a.deltaPct}%). Decline unless ${getNames} fills a critical roster hole that ${giveNames} can't. `;
   }
-  return `Lopsided in their favor — you lose ${Math.abs(a.delta)} points of value (${a.deltaPct}%). Decline.`;
+  return `Lopsided in their favor — you lose ${Math.abs(a.delta).toFixed(1)} points of value (${a.deltaPct}%). Decline. `;
 }

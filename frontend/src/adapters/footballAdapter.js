@@ -1,6 +1,7 @@
 import { calculateFantasyPoints } from '../utils/calculateFantasyPoints.js';
 import { FOOTBALL_SCORING_PRESETS } from '../config/scoringSystems.js';
 import { SPORTS } from '../config/sportConfig.js';
+import { TEAM_BYE_WEEKS, PLAYER_STATUS } from '../data/footballPlayers.js';
 
 const REPLACEMENT_LEVEL = SPORTS.football.replacementLevel;
 
@@ -34,8 +35,16 @@ export function normalizeFootballPlayer(raw, scoringPreset = 'ppr', rank = 0, po
     vbd,
     vbdBaseline: baseline,
 
+    byeWeek: raw.byeWeek ?? null,
+    status: raw.status ?? 'Active',
+
     pff: raw.pff ?? {},
-    nextGen: raw.nextGen ?? {},
+    // Merge analytics with computed ranks so the draft board can display them.
+    nextGen: {
+      ...(raw.nextGen ?? {}),
+      compositeRank: rank + 1,      // VBD-sorted overall rank (1 = best)
+      posRank: posRank + 1,          // VBD-sorted rank within position
+    },
 
     isDrafted: false,
   };
@@ -48,6 +57,8 @@ export function normalizeFootballPlayers(rawPlayers, scoringPreset = 'ppr') {
 
   const withPts = rawPlayers.map(p => ({
     ...p,
+    byeWeek: p.byeWeek ?? TEAM_BYE_WEEKS[p.team] ?? null,
+    status: p.status ?? PLAYER_STATUS[p.id] ?? 'Active',
     _pts: calculateFantasyPoints(p.stats ?? {}, scoring),
   }));
 

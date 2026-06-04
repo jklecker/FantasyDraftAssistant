@@ -22,7 +22,7 @@ The `Dockerfile` does a 3-stage build:
 3. A **tiny JRE image** runs the JAR
 
 Render deploys that image and gives you a public URL like:  
-`https://fantasy-baseball-draft-assistant.onrender.com`
+`https://fantasy-draft-assistant.onrender.com`
 
 Anyone with the URL can open it in a browser — desktop or phone, no setup required.
 
@@ -38,7 +38,7 @@ Anyone with the URL can open it in a browser — desktop or phone, no setup requ
 
 ```powershell
 # From the project root (first time)
-git remote add origin https://github.com/jklecker/FantasyBaseballDraftAssistant.git
+git remote add origin https://github.com/jklecker/FantasyDraftAssistant.git
 git push -u origin main
 ```
 
@@ -55,7 +55,7 @@ git push
 1. Go to https://render.com and sign in (or create a free account).
 2. Click **New +** → **Web Service**.
 3. Choose **Build and deploy from a Git repository** → connect your GitHub account if not already.
-4. Select the **FantasyBaseballDraftAssistant** repo.
+4. Select the **FantasyDraftAssistant** repo.
 5. Render will detect `render.yaml` automatically and pre-fill all settings.
 6. Click **Create Web Service** and wait ~5 minutes for the first build.
 
