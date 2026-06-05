@@ -15,6 +15,19 @@ import java.util.stream.Collectors;
 /**
  * Joins Sleeper player pool with FantasyPros rankings + projections.
  * Fuzzy-matches on normalized name to handle apostrophes, suffixes, D/ST variants, etc.
+ *
+ * Sources merged (all best-effort; missing sources degrade gracefully):
+ *   1. Sleeper           — player pool (roster, team, bye week)
+ *   2. FantasyPros ECR   — expert consensus rank + season projections
+ *   3. ESPN ADP          — public ESPN Fantasy ADP
+ *   4. CBS Sports        — consensus rankings scraped from cbssports.com
+ *   5. Matthew Berry     — positional rankings parsed from local rankings-2026.md
+ *   6. DraftSharks       — consensus rankings scraped from draftsharks.com
+ *   7. Fantasy Life      — Next.js rankings page (tries __NEXT_DATA__ first)
+ *   8. Yahoo Boone       — Justin Boone Top 300 article (URL updated yearly)
+ *
+ * Composite rank = mean of all available per-source overall ranks.
+ * sourceCount in nextGen map indicates how many sources contributed (max 7).
  */
 @Service
 public class NflDataMergeService {
@@ -23,10 +36,14 @@ public class NflDataMergeService {
     private static final int NFL_ID_OFFSET = 10_000;
     private static final int MAX_FP_ONLY_RANK = 250; // don't add FP-only players ranked beyond this
 
-    @Autowired private NflPlayerService   sleeperSvc;
-    @Autowired private FantasyProsService fpSvc;
-    @Autowired private EspnAdpService     espnSvc;
-    @Autowired private CbsRankingsService cbsSvc;
+    @Autowired private NflPlayerService       sleeperSvc;
+    @Autowired private FantasyProsService     fpSvc;
+    @Autowired private EspnAdpService         espnSvc;
+    @Autowired private CbsRankingsService     cbsSvc;
+    @Autowired private MarkdownRankingsService mdSvc;
+    @Autowired private DraftSharksService     dsSvc;
+    @Autowired private FantasyLifeService     flSvc;
+    @Autowired private YahooBooneService      yhSvc;
 
     public List<Player> getMergedPlayers(String scoring) {
         List<NflPlayerService.SleeperPlayer>  sleeperPlayers = sleeperSvc.getPlayers();
@@ -34,12 +51,22 @@ public class NflDataMergeService {
         List<FantasyProsService.FpProjection> projections    = fpSvc.getProjections(scoring);
         List<EspnAdpService.EspnPlayer>       espnRankings   = espnSvc.getRankings(scoring);
         List<CbsRankingsService.CbsPlayer>    cbsRankings    = cbsSvc.getRankings(scoring);
+        List<MarkdownRankingsService.MdPlayer> mdRankings    = mdSvc.getRankings();
+        List<MarkdownRankingsService.AgeEntry> ageData       = mdSvc.getAgeData();
+        List<DraftSharksService.DsPlayer>      dsRankings    = dsSvc.getRankings(scoring);
+        List<FantasyLifeService.FlPlayer>      flRankings    = flSvc.getRankings(scoring);
+        List<YahooBooneService.YhPlayer>       yhRankings    = yhSvc.getRankings();
 
-        // Index FP data by normalized name
-        Map<String, FantasyProsService.FpRanking>    rankMap = indexByName(rankings,   r -> r.name);
+        // Index all sources by normalized name
+        Map<String, FantasyProsService.FpRanking>    rankMap = indexByName(rankings,    r -> r.name);
         Map<String, FantasyProsService.FpProjection> projMap = indexByName(projections, p -> p.name);
         Map<String, EspnAdpService.EspnPlayer>       espnMap = indexByName(espnRankings, e -> e.name);
         Map<String, CbsRankingsService.CbsPlayer>    cbsMap  = indexByName(cbsRankings,  c -> c.name);
+        Map<String, MarkdownRankingsService.MdPlayer> mdMap  = indexByName(mdRankings,   m -> m.name());
+        Map<String, MarkdownRankingsService.AgeEntry> ageMap = indexByName(ageData,      a -> a.name());
+        Map<String, DraftSharksService.DsPlayer>      dsMap  = indexByName(dsRankings,   d -> d.name());
+        Map<String, FantasyLifeService.FlPlayer>      flMap  = indexByName(flRankings,   f -> f.name());
+        Map<String, YahooBooneService.YhPlayer>       yhMap  = indexByName(yhRankings,   y -> y.name());
 
         // Secondary DST index: "san francisco 49ers" → DST entry keyed by "san francisco 49ers dst"
         Map<String, FantasyProsService.FpRanking> dstRankMap = new LinkedHashMap<>();
@@ -74,10 +101,23 @@ public class NflDataMergeService {
             FantasyProsService.FpProjection proj = findBest(sp.fullName, projMap);
             if (proj != null) attachProjection(p, proj);
 
-            // Composite rank: average across available sources (FP, ESPN, CBS).
-            EspnAdpService.EspnPlayer    eRank = findBest(sp.fullName, espnMap);
-            CbsRankingsService.CbsPlayer cRank = findBest(sp.fullName, cbsMap);
-            attachComposite(p, rank, eRank, cRank);
+            // Age data from markdown (always available; patches age + adp hint)
+            MarkdownRankingsService.AgeEntry age = findBest(sp.fullName, ageMap);
+            if (age != null) {
+                Map<String, Double> ng = p.getNextGen() != null ? new HashMap<>(p.getNextGen()) : new HashMap<>();
+                ng.put("age", (double) age.age());
+                if (p.getAdp() == null && age.adpMidpoint() > 0) p.setAdp(age.adpMidpoint());
+                p.setNextGen(ng);
+            }
+
+            // Composite rank: average across all available sources
+            EspnAdpService.EspnPlayer              eRank  = findBest(sp.fullName, espnMap);
+            CbsRankingsService.CbsPlayer           cRank  = findBest(sp.fullName, cbsMap);
+            MarkdownRankingsService.MdPlayer        mdRank = findBest(sp.fullName, mdMap);
+            DraftSharksService.DsPlayer             dsRank = findBest(sp.fullName, dsMap);
+            FantasyLifeService.FlPlayer             flRank = findBest(sp.fullName, flMap);
+            YahooBooneService.YhPlayer              yhRank = findBest(sp.fullName, yhMap);
+            attachComposite(p, rank, eRank, cRank, mdRank, dsRank, flRank, yhRank);
 
             result.add(p);
             addedKeys.add(key);
@@ -97,9 +137,13 @@ public class NflDataMergeService {
             FantasyProsService.FpProjection proj = findBest(rank.name, projMap);
             if (proj != null) attachProjection(p, proj);
 
-            EspnAdpService.EspnPlayer    eRank = findBest(rank.name, espnMap);
-            CbsRankingsService.CbsPlayer cRank = findBest(rank.name, cbsMap);
-            attachComposite(p, rank, eRank, cRank);
+            EspnAdpService.EspnPlayer              eRank  = findBest(rank.name, espnMap);
+            CbsRankingsService.CbsPlayer           cRank  = findBest(rank.name, cbsMap);
+            MarkdownRankingsService.MdPlayer        mdRank = findBest(rank.name, mdMap);
+            DraftSharksService.DsPlayer             dsRank = findBest(rank.name, dsMap);
+            FantasyLifeService.FlPlayer             flRank = findBest(rank.name, flMap);
+            YahooBooneService.YhPlayer              yhRank = findBest(rank.name, yhMap);
+            attachComposite(p, rank, eRank, cRank, mdRank, dsRank, flRank, yhRank);
 
             result.add(p);
             addedKeys.add(key);
@@ -146,25 +190,33 @@ public class NflDataMergeService {
     }
 
     /**
-     * Composite rank = mean of per-source ranks (FantasyPros ECR, ESPN ADP, CBS).
-     * Stored on the Player's nextGen map alongside the per-source ranks and a count
-     * of contributing sources so the UI can show a "consensus confidence" indicator.
+     * Composite rank = trimmed mean of all available per-source overall ranks.
+     * Stored on the Player's nextGen map alongside individual source ranks and a
+     * sourceCount so the UI can show a consensus confidence indicator (up to 7 dots).
      */
     private void attachComposite(Player p,
                                  FantasyProsService.FpRanking fp,
                                  EspnAdpService.EspnPlayer espn,
-                                 CbsRankingsService.CbsPlayer cbs) {
+                                 CbsRankingsService.CbsPlayer cbs,
+                                 MarkdownRankingsService.MdPlayer berry,
+                                 DraftSharksService.DsPlayer ds,
+                                 FantasyLifeService.FlPlayer fl,
+                                 YahooBooneService.YhPlayer yh) {
         List<Double> ranks = new ArrayList<>();
         Map<String, Double> ng = p.getNextGen() != null ? new HashMap<>(p.getNextGen()) : new HashMap<>();
 
-        if (fp != null)   { ranks.add((double) fp.rank);   ng.put("fpRank",   (double) fp.rank); }
-        if (espn != null) { ranks.add(espn.adp);           ng.put("espnAdp",  espn.adp); }
-        if (cbs != null)  { ranks.add((double) cbs.rank);  ng.put("cbsRank",  (double) cbs.rank); }
+        if (fp    != null) { ranks.add((double) fp.rank);                     ng.put("fpRank",    (double) fp.rank); }
+        if (espn  != null) { ranks.add(espn.adp);                             ng.put("espnAdp",   espn.adp); }
+        if (cbs   != null) { ranks.add((double) cbs.rank);                  ng.put("cbsRank",   (double) cbs.rank); }
+        if (berry != null) { ranks.add((double) berry.estimatedOverallRank()); ng.put("berryRank", (double) berry.estimatedOverallRank()); }
+        if (ds    != null) { ranks.add((double) ds.rank());                   ng.put("dsRank",    (double) ds.rank()); }
+        if (fl    != null) { ranks.add((double) fl.rank());                   ng.put("flRank",    (double) fl.rank()); }
+        if (yh    != null) { ranks.add((double) yh.rank());                   ng.put("yhRank",    (double) yh.rank()); }
 
         if (!ranks.isEmpty()) {
             double mean = ranks.stream().mapToDouble(Double::doubleValue).average().orElse(0);
-            ng.put("compositeRank",  mean);
-            ng.put("sourceCount",    (double) ranks.size());
+            ng.put("compositeRank", mean);
+            ng.put("sourceCount",   (double) ranks.size());
         }
         p.setNextGen(ng);
     }

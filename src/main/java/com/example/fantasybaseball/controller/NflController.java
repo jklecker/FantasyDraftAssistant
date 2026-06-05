@@ -2,10 +2,14 @@ package com.example.fantasybaseball.controller;
 
 import com.example.fantasybaseball.model.Player;
 import com.example.fantasybaseball.service.CbsRankingsService;
+import com.example.fantasybaseball.service.DraftSharksService;
 import com.example.fantasybaseball.service.EspnAdpService;
+import com.example.fantasybaseball.service.FantasyLifeService;
 import com.example.fantasybaseball.service.FantasyProsService;
+import com.example.fantasybaseball.service.MarkdownRankingsService;
 import com.example.fantasybaseball.service.NflDataMergeService;
 import com.example.fantasybaseball.service.NflPlayerService;
+import com.example.fantasybaseball.service.YahooBooneService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -17,11 +21,15 @@ import java.util.Map;
 @RequestMapping("/nfl")
 public class NflController {
 
-    @Autowired private NflDataMergeService mergeService;
-    @Autowired private NflPlayerService    sleeperService;
-    @Autowired private FantasyProsService  fpService;
-    @Autowired private EspnAdpService      espnService;
-    @Autowired private CbsRankingsService  cbsService;
+    @Autowired private NflDataMergeService    mergeService;
+    @Autowired private NflPlayerService       sleeperService;
+    @Autowired private FantasyProsService     fpService;
+    @Autowired private EspnAdpService         espnService;
+    @Autowired private CbsRankingsService     cbsService;
+    @Autowired private MarkdownRankingsService mdService;
+    @Autowired private DraftSharksService     dsService;
+    @Autowired private FantasyLifeService     flService;
+    @Autowired private YahooBooneService      yhService;
 
     /**
      * GET /nfl/players?scoring=ppr|standard|half_ppr
@@ -42,6 +50,9 @@ public class NflController {
         fpService.invalidateCache();
         espnService.invalidateCache();
         cbsService.invalidateCache();
+        dsService.invalidateCache();
+        flService.invalidateCache();
+        yhService.invalidateCache();
         return ResponseEntity.ok(Map.of("status", "Cache cleared. Next request will re-fetch."));
     }
 
@@ -50,12 +61,17 @@ public class NflController {
      */
     @GetMapping("/status")
     public ResponseEntity<Map<String, Object>> status() {
-        return ResponseEntity.ok(Map.of(
-                "sleeperPlayerCount", sleeperService.getPlayers().size(),
-                "fpRankingsPpr",      fpService.getRankings("ppr").size(),
-                "fpProjectionsPpr",   fpService.getProjections("ppr").size(),
-                "espnRankingsPpr",    espnService.getRankings("ppr").size(),
-                "cbsRankingsPpr",     cbsService.getRankings("ppr").size()
+        return ResponseEntity.ok(Map.ofEntries(
+                Map.entry("sleeperPlayerCount",   sleeperService.getPlayers().size()),
+                Map.entry("fpRankingsPpr",        fpService.getRankings("ppr").size()),
+                Map.entry("fpProjectionsPpr",     fpService.getProjections("ppr").size()),
+                Map.entry("espnRankingsPpr",      espnService.getRankings("ppr").size()),
+                Map.entry("cbsRankingsPpr",       cbsService.getRankings("ppr").size()),
+                Map.entry("berryRankings",        mdService.getRankings().size()),
+                Map.entry("berryAgeData",         mdService.getAgeData().size()),
+                Map.entry("draftSharksRankings",  dsService.getRankings("ppr").size()),
+                Map.entry("fantasyLifeRankings",  flService.getRankings("ppr").size()),
+                Map.entry("yahooBooneRankings",   yhService.getRankings().size())
         ));
     }
 }

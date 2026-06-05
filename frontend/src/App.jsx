@@ -113,7 +113,9 @@ export default function App() {
   const sportConfig = getSportConfig(sport);
 
   // Football-specific state
-  const [footballScoringPreset, setFootballScoringPreset] = useState('ppr');
+  const [footballScoringPreset, setFootballScoringPreset] = useState(() => {
+    try { return window.localStorage.getItem('footballScoringPreset') || 'ppr'; } catch (_) { return 'ppr'; }
+  });
   const [customFootballScoring, setCustomFootballScoring] = useState(null);
   const [customScoringJson, setCustomScoringJson] = useState('');
   const [customScoringError, setCustomScoringError] = useState('');
@@ -128,6 +130,11 @@ export default function App() {
   });
   const [footballBoardSearch, setFootballBoardSearch] = useState('');
   const [footballBoardSort, setFootballBoardSort] = useState({ col: 'vbd', dir: 'desc' });
+  const [footballPosFilter, setFootballPosFilter] = useState('QB');
+  const [draftedChipsExpanded, setDraftedChipsExpanded] = useState(false);
+  const [baseballBoardSearch, setBaseballBoardSearch] = useState('');
+  const [baseballBoardPos, setBaseballBoardPos] = useState('ALL');
+  const [baseballTopPos, setBaseballTopPos] = useState('C');
   const [footballEngine, setFootballEngine] = useState(null);
   const [footballPlayers, setFootballPlayers] = useState(null); // null = not loaded, [] = empty
   const [footballLoading, setFootballLoading] = useState(false);
@@ -331,8 +338,8 @@ export default function App() {
     return null;
   };
 
-  // Derived from footballPicks for backward-compat with read sites.
-  const footballDraftedIds = footballPicks.map(p => p.playerId);
+  // Derived from footballPicks — memoized so the engine useEffect only fires when picks actually change.
+  const footballDraftedIds = useMemo(() => footballPicks.map(p => p.playerId), [footballPicks]);
 
   // Add a football pick — auto-assigns it to whichever team is on the clock
   // based on snake order. Toasts on duplicate player.
@@ -388,6 +395,9 @@ export default function App() {
   useEffect(() => {
     try { window.localStorage.setItem('footballTeamSize', String(footballTeamSize)); } catch (_) {}
   }, [footballTeamSize]);
+  useEffect(() => {
+    try { window.localStorage.setItem('footballScoringPreset', footballScoringPreset); } catch (_) {}
+  }, [footballScoringPreset]);
 
   // Fetch live NFL players when sport switches to football or scoring changes
   useEffect(() => {
@@ -677,6 +687,14 @@ export default function App() {
       return `IP ${Number(stat(p, 'IP', 'ip')).toFixed(1)} | W ${stat(p, 'W', 'w')} | SV ${stat(p, 'SV', 'sv')} | K ${stat(p, 'pitchingK', 'pK')} | ERA ${Number(stat(p, 'ERA', 'era')).toFixed(2)} | WHIP ${Number(stat(p, 'WHIP', 'whip')).toFixed(2)}`;
     }
     return `R ${stat(p, 'R', 'r')} | H ${stat(p, 'H', 'h')} | 2B ${stat(p, 'twoB', '2B')} | 3B ${stat(p, 'threeB', '3B')} | HR ${stat(p, 'HR', 'hr')} | RBI ${stat(p, 'RBI', 'rbi')} | SB ${stat(p, 'SB', 'sb')} | BB ${stat(p, 'BB', 'bb')} | K ${stat(p, 'K', 'k')}`;
+  };
+
+  // Short stat line for compact table cells
+  const shortProjection = (p) => {
+    if (isPitcher(p)) {
+      return `${stat(p, 'W', 'w')}W · ${stat(p, 'pitchingK', 'pK')}K · ${Number(stat(p, 'ERA', 'era')).toFixed(2)} ERA · ${Number(stat(p, 'WHIP', 'whip')).toFixed(2)} WHIP`;
+    }
+    return `${stat(p, 'HR', 'hr')}HR · ${stat(p, 'RBI', 'rbi')}RBI · ${stat(p, 'R', 'r')}R · ${stat(p, 'SB', 'sb')}SB`;
   };
   const myTeam = draftState?.teams?.find(t => t.id === myTeamId) || null;
   const { keepers: draftedKeepers, picks: draftedPicks } = buildDraftBoard(draftState);
@@ -1042,7 +1060,7 @@ export default function App() {
                       {sortHeader('adp', 'ADP', 'Average Draft Position — click to sort by when players typically go')}
                       <th title="Composite rank from FantasyPros, ESPN, and CBS — lower is better">Consensus</th>
                       <th>Bye / Status</th>
-                      <th></th>
+                      <th className="sticky-col"></th>
                     </tr></thead>
                     <tbody>
                       {rows.map((p, i) => {
@@ -1060,15 +1078,21 @@ export default function App() {
                           <td style={{fontWeight:600,color: footballBoardSort.col === 'vbd' ? '#2b6cb0' : undefined}}>{p.vbd != null ? p.vbd.toFixed(1) : '—'}</td>
                           <td style={{fontWeight: footballBoardSort.col === 'pts' ? 600 : undefined}}>{p.projections.fantasyPoints.toFixed(1)}</td>
                           <td style={{fontWeight: footballBoardSort.col === 'adp' ? 600 : undefined}}>{p.adp ?? '—'}</td>
-                          <td title={`Sources: ${sc}/3 (FP/ESPN/CBS)`}>
+                          <td title={`Sources: ${sc}/7 (FP/ESPN/CBS/Berry/DraftSharks/FantasyLife/Yahoo)`}>
                             {cr ? <>
                               <strong>{cr.toFixed(1)}</strong>
-                              <span style={{marginLeft:4,fontSize:'0.7em',color: sc >= 3 ? '#38a169' : sc === 2 ? '#dd6b20' : '#a0aec0'}}>
-                                {'●'.repeat(sc)}{'○'.repeat(Math.max(0, 3 - sc))}
+                              <span style={{marginLeft:4,fontSize:'0.7em',color: sc >= 5 ? '#38a169' : sc >= 2 ? '#dd6b20' : '#a0aec0'}}>
+                                {'●'.repeat(sc)}{'○'.repeat(Math.max(0, 7 - sc))}
                               </span>
                             </> : '—'}
                           </td>
                           <td>
+                            {p.byeWeek ? `Wk ${p.byeWeek}` : '—'}
+                            {p.status && p.status !== 'Active' && (
+                              <span style={{marginLeft:4,fontSize:'0.72em',padding:'1px 5px',borderRadius:4,background:'#fff5f5',color:'#c53030',border:'1px solid #fed7d7'}}>{p.status}</span>
+                            )}
+                          </td>
+                          <td className="sticky-col">
                             <button className="btn-primary" style={{padding:'4px 10px',fontSize:'0.85em'}}
                               onClick={() => { addFootballPick(p.id); setFootballBoardSearch(''); }}>
                               Draft
@@ -1126,23 +1150,39 @@ export default function App() {
             </div>
           </section>
 
-          {sportConfig.positions.map(pos => (
-            footballEngine.topByPosition[pos]?.length > 0 && (
-              <section key={pos} className="card" style={{marginBottom:8}}>
-                <h4 style={{marginBottom:8}}>Top {pos}s</h4>
-                <div style={{display:'flex',flexWrap:'wrap',gap:8}}>
-                  {footballEngine.topByPosition[pos].map(p => (
-                    <div key={p.id} style={{background:'#edf2f7',borderRadius:6,padding:'6px 10px',fontSize:'0.85em'}}>
-                      <strong>{p.name}</strong> <span style={{color:'#718096'}}>{p.team}</span>{' '}
-                      <span style={{color:'#2d3748'}}>{p.projections.fantasyPoints.toFixed(1)} pts</span>{' '}
-                      <button className="btn-primary" style={{padding:'2px 6px',fontSize:'0.78em',marginLeft:4}}
-                        onClick={() => addFootballPick(p.id)}>+</button>
+          {(() => {
+            const availPos = sportConfig.positions.filter(pos => footballEngine.topByPosition[pos]?.length > 0);
+            if (!availPos.length) return null;
+            const selPos = availPos.includes(footballPosFilter) ? footballPosFilter : availPos[0];
+            const topPlayers = (footballEngine.topByPosition[selPos] ?? []).slice(0, 5);
+            return (
+              <section className="card">
+                <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:12,flexWrap:'wrap'}}>
+                  <h4 style={{margin:0}}>Top Players by Position</h4>
+                  <select
+                    value={selPos}
+                    onChange={e => setFootballPosFilter(e.target.value)}
+                    style={{padding:'4px 10px',borderRadius:6,border:'1px solid #cbd5e0',fontSize:'0.9em'}}
+                  >
+                    {availPos.map(pos => <option key={pos} value={pos}>{pos}</option>)}
+                  </select>
+                </div>
+                <div style={{display:'flex',flexDirection:'column',gap:6}}>
+                  {topPlayers.map((p, i) => (
+                    <div key={p.id} style={{display:'flex',alignItems:'center',gap:8,padding:'6px 10px',background:'#f7fafc',borderRadius:6,border:'1px solid #e2e8f0'}}>
+                      <span style={{fontWeight:700,color:'#a0aec0',minWidth:22,textAlign:'right'}}>#{i+1}</span>
+                      <span className="badge">{p.position}</span>
+                      <strong style={{flex:1}}>{p.name}</strong>
+                      <span style={{color:'#718096',fontSize:'0.85em'}}>{p.team}</span>
+                      <span style={{color:'#4a5568',fontSize:'0.85em',minWidth:55,textAlign:'right'}}>{p.projections.fantasyPoints.toFixed(1)} pts</span>
+                      <button className="btn-primary" style={{padding:'2px 8px',fontSize:'0.78em'}}
+                        onClick={() => addFootballPick(p.id)}>Draft</button>
                     </div>
                   ))}
                 </div>
               </section>
-            )
-          ))}
+            );
+          })()}
 
           <section className="card">
             <h4 style={{display:'flex',alignItems:'center',gap:10}}>
@@ -1155,25 +1195,33 @@ export default function App() {
                   ↩ Undo Last
                 </button>
               )}
+              {footballDraftedIds.length > 0 && (
+                <button onClick={() => setDraftedChipsExpanded(x => !x)}
+                  style={{fontSize:'0.8em',padding:'3px 10px',borderRadius:6,border:'1px solid #e2e8f0',background:'#f7fafc',color:'#4a5568',cursor:'pointer',fontWeight:400,marginLeft:'auto'}}>
+                  {draftedChipsExpanded ? '▲ Collapse' : '▼ Expand'}
+                </button>
+              )}
             </h4>
             {footballDraftedIds.length === 0
-              ? <p className="hint">No players drafted yet.</p>
-              : <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
-                  {footballEngine.players
-                    .filter(p => footballDraftedIds.includes(p.id))
-                    .map(p => {
-                      const pick = footballPicks.find(fp => fp.playerId === p.id);
-                      const teamLabel = pick ? `T${pick.teamSlot}` : '?';
-                      return (
-                      <span key={p.id} style={{background:'#fed7d7',borderRadius:4,padding:'3px 8px',fontSize:'0.82em'}}>
-                        <span className="badge" style={{background:'#4a5568'}}>{teamLabel}</span>
-                        <span className="badge">{p.position}</span> {p.name}
-                        <button style={{marginLeft:4,background:'none',border:'none',cursor:'pointer',color:'#c53030'}}
-                          onClick={() => removeFootballPick(p.id)}>✕</button>
-                      </span>
-                      );
-                    })}
-                </div>
+              ? <p className="hint">No players drafted yet. See the 📜 History tab for the full draft order.</p>
+              : draftedChipsExpanded
+                ? <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
+                    {footballEngine.players
+                      .filter(p => footballDraftedIds.includes(p.id))
+                      .map(p => {
+                        const pick = footballPicks.find(fp => fp.playerId === p.id);
+                        const teamLabel = pick ? `T${pick.teamSlot}` : '?';
+                        return (
+                        <span key={p.id} style={{background:'#fed7d7',borderRadius:4,padding:'3px 8px',fontSize:'0.82em'}}>
+                          <span className="badge" style={{background:'#4a5568'}}>{teamLabel}</span>
+                          <span className="badge">{p.position}</span> {p.name}
+                          <button style={{marginLeft:4,background:'none',border:'none',cursor:'pointer',color:'#c53030'}}
+                            onClick={() => removeFootballPick(p.id)}>✕</button>
+                        </span>
+                        );
+                      })}
+                  </div>
+                : <p className="hint" style={{margin:0}}>Click ▼ Expand to see all {footballDraftedIds.length} drafted players, or view the 📜 History tab.</p>
             }
           </section>
 
@@ -1304,6 +1352,122 @@ export default function App() {
               Submit Pick
             </button>
           </section>
+
+          {/* Available Player Browser */}
+          {draftState?.availablePlayers?.length > 0 && (
+            <section className="card">
+              <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:10,flexWrap:'wrap'}}>
+                <h3 style={{margin:0}}>⚾ Available Players</h3>
+                <input
+                  type="text"
+                  placeholder="Search by name or team…"
+                  value={baseballBoardSearch}
+                  onChange={e => setBaseballBoardSearch(e.target.value)}
+                  style={{flex:1,minWidth:140,padding:'5px 10px',border:'1px solid #cbd5e0',borderRadius:6,fontSize:'0.9em'}}
+                />
+                <select
+                  value={baseballBoardPos}
+                  onChange={e => setBaseballBoardPos(e.target.value)}
+                  style={{padding:'5px 10px',border:'1px solid #cbd5e0',borderRadius:6,fontSize:'0.9em'}}
+                >
+                  <option value="ALL">All Positions</option>
+                  {sportConfig.positions.map(pos => <option key={pos} value={pos}>{pos}</option>)}
+                </select>
+              </div>
+              {(() => {
+                const q = baseballBoardSearch.trim().toLowerCase();
+                let players = draftState.availablePlayers;
+                if (baseballBoardPos !== 'ALL') players = players.filter(p => p.position === baseballBoardPos);
+                if (q) players = players.filter(p =>
+                  p.name.toLowerCase().includes(q) || (p.team ?? '').toLowerCase().includes(q)
+                );
+                const rows = players.slice(0, 15);
+                if (rows.length === 0) return <p className="hint">No available players match that filter.</p>;
+                return (
+                  <div className="data-table-wrapper">
+                    <table className="data-table">
+                      <thead>
+                        <tr>
+                          <th>#</th><th>Player</th><th>Pos</th><th>Team</th>
+                          <th>Key Stats</th><th>Cats</th><th className="sticky-col"></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {rows.map((p, i) => (
+                          <tr key={p.id} className="clickable"
+                            onClick={() => { setSelectedPick(p); setPickSearch(p.name); setPickResults([]); }}
+                            title="Click to select">
+                            <td className="pick-num">#{i + 1}</td>
+                            <td><strong>{p.name}</strong></td>
+                            <td><span className="badge">{p.position}</span></td>
+                            <td>{p.team}</td>
+                            <td style={{fontSize:'0.83em',color:'#4a5568'}}>{shortProjection(p)}</td>
+                            <td style={{whiteSpace:'nowrap'}}>
+                              {baseballCatStrength(p).map(c => (
+                                <span key={c} style={{display:'inline-block',marginRight:3,padding:'1px 5px',borderRadius:4,fontSize:'0.72em',background:'#ebf8ff',color:'#2b6cb0',border:'1px solid #bee3f8',fontWeight:600}}>{c}</span>
+                              ))}
+                            </td>
+                            <td className="sticky-col">
+                              <button className="btn-primary" style={{padding:'4px 12px',fontSize:'0.85em'}}
+                                onClick={e => { e.stopPropagation(); handlePickPlayer(p); }}>
+                                Draft
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                );
+              })()}
+            </section>
+          )}
+
+          {/* Top 5 by Position */}
+          {draftState?.availablePlayers?.length > 0 && (() => {
+            const availPos = sportConfig.positions.filter(pos =>
+              draftState.availablePlayers.some(p => p.position === pos)
+            );
+            if (!availPos.length) return null;
+            const selPos = availPos.includes(baseballTopPos) ? baseballTopPos : availPos[0];
+            const topPlayers = draftState.availablePlayers
+              .filter(p => p.position === selPos)
+              .slice(0, 5);
+            return (
+              <section className="card">
+                <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:12,flexWrap:'wrap'}}>
+                  <h4 style={{margin:0}}>Top Players by Position</h4>
+                  <select
+                    value={selPos}
+                    onChange={e => setBaseballTopPos(e.target.value)}
+                    style={{padding:'4px 10px',borderRadius:6,border:'1px solid #cbd5e0',fontSize:'0.9em'}}
+                  >
+                    {availPos.map(pos => <option key={pos} value={pos}>{pos}</option>)}
+                  </select>
+                </div>
+                <div style={{display:'flex',flexDirection:'column',gap:6}}>
+                  {topPlayers.map((p, i) => (
+                    <div key={p.id} style={{display:'flex',alignItems:'center',gap:8,padding:'6px 10px',background:'#f7fafc',borderRadius:6,border:'1px solid #e2e8f0',cursor:'pointer'}}
+                      onClick={() => { setSelectedPick(p); setPickSearch(p.name); setPickResults([]); }}>
+                      <span style={{fontWeight:700,color:'#a0aec0',minWidth:22,textAlign:'right'}}>#{i+1}</span>
+                      <span className="badge">{p.position}</span>
+                      <strong style={{flex:1}}>{p.name}</strong>
+                      <span style={{color:'#718096',fontSize:'0.85em'}}>{p.team}</span>
+                      <span style={{color:'#4a5568',fontSize:'0.82em',minWidth:120,textAlign:'right'}}>{shortProjection(p)}</span>
+                      <div style={{display:'flex',gap:3}}>
+                        {baseballCatStrength(p).map(c => (
+                          <span key={c} style={{padding:'1px 5px',borderRadius:4,fontSize:'0.7em',background:'#ebf8ff',color:'#2b6cb0',border:'1px solid #bee3f8',fontWeight:600}}>{c}</span>
+                        ))}
+                      </div>
+                      <button className="btn-primary" style={{padding:'2px 8px',fontSize:'0.78em',flexShrink:0}}
+                        onClick={e => { e.stopPropagation(); handlePickPlayer(p); }}>Draft</button>
+                    </div>
+                  ))}
+                  {topPlayers.length === 0 && <p className="hint" style={{margin:0}}>No available {selPos}s.</p>}
+                </div>
+              </section>
+            );
+          })()}
 
           {/* Recommendations */}
           {recommendations.length > 0 && (
@@ -1764,57 +1928,134 @@ export default function App() {
       {/* ── DRAFTED TAB ─────────────────────────────────────────────────── */}
       {activeTab === 'drafted' && (
         <div className="tab-content" data-testid="drafted-tab">
-          {!draftState ? (
-            <p className="hint">Draft not initialized yet.</p>
-          ) : (
-            <>
-              {draftedKeepers.length > 0 && (
+          {isFootball(sport) ? (
+            /* ── Football history ─────────────────────────────────────── */
+            !footballEngine || footballPicks.length === 0 ? (
+              <p className="hint">No picks yet — start drafting on the Draft Board.</p>
+            ) : (
+              <>
                 <section className="card">
-                  <h3>🔒 Keepers</h3>
+                  <h3>📜 Draft Order ({footballPicks.length} picks)</h3>
                   <div className="data-table-wrapper">
                     <table className="data-table">
-                      <thead><tr><th>Player</th><th>Pos</th><th>Team</th><th>Kept In Rd</th><th>Kept By</th></tr></thead>
+                      <thead>
+                        <tr>
+                          <th>#</th><th>Rd</th><th>Team</th>
+                          <th>Player</th><th>Pos</th><th>NFL Team</th><th>Proj Pts</th>
+                        </tr>
+                      </thead>
                       <tbody>
-                        {draftedKeepers.map((entry, i) => (
-                          <tr key={i}>
-                            <td><strong>{entry.player.name}</strong></td>
-                            <td><span className="badge">{entry.player.position}</span></td>
-                            <td>{entry.player.team}</td>
-                            <td>{entry.round}</td>
-                            <td>{entry.teamName}</td>
-                          </tr>
-                        ))}
+                        {footballPicks.map(pick => {
+                          const player = footballEngine.players.find(p => p.id === pick.playerId);
+                          if (!player) return null;
+                          const round = Math.ceil(pick.overall / footballTeamSize);
+                          return (
+                            <tr key={pick.playerId}>
+                              <td className="pick-num">#{pick.overall}</td>
+                              <td>{round}</td>
+                              <td>Team {pick.teamSlot}{pick.teamSlot === footballTeamPos ? ' ⭐' : ''}</td>
+                              <td><strong>{player.name}</strong></td>
+                              <td><span className="badge">{player.position}</span></td>
+                              <td>{player.team}</td>
+                              <td>{player.projections.fantasyPoints.toFixed(1)}</td>
+                            </tr>
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>
                 </section>
-              )}
-              <section className="card">
-                <h3>📜 Draft Picks</h3>
-                {draftedPicks.length === 0
-                  ? <p className="hint">No picks yet.</p>
-                  : (
+                <section className="card">
+                  <h3>Team Rosters <span style={{fontSize:'0.85rem',fontWeight:400,color:'#b7791f'}}>— your team highlighted ⭐</span></h3>
+                  <div className="team-grid">
+                    {Array.from({length: footballTeamSize}, (_, i) => i + 1)
+                      .sort((a, b) => {
+                        if (a === footballTeamPos) return -1;
+                        if (b === footballTeamPos) return 1;
+                        return a - b;
+                      })
+                      .map(slot => {
+                        const isMine = slot === footballTeamPos;
+                        const teamPicks = footballPicks
+                          .filter(p => p.teamSlot === slot)
+                          .map(p => footballEngine.players.find(pl => pl.id === p.playerId))
+                          .filter(Boolean);
+                        return (
+                          <div key={slot} className={`team-card${isMine ? ' my-team' : ''}`}>
+                            <h4>
+                              {isMine ? '⭐ ' : ''}Team {slot}{isMine ? ' (You)' : ''}
+                              {isMine && <span className="my-team-badge">YOUR TEAM</span>}
+                              <span className="pick-count">({teamPicks.length})</span>
+                            </h4>
+                            {teamPicks.length === 0
+                              ? <p className="empty-roster">—</p>
+                              : <ol>{teamPicks.map(p => (
+                                  <li key={p.id}>
+                                    <span className="badge">{p.position}</span> {p.name}
+                                  </li>
+                                ))}</ol>
+                            }
+                          </div>
+                        );
+                      })}
+                  </div>
+                </section>
+              </>
+            )
+          ) : (
+            /* ── Baseball history ─────────────────────────────────────── */
+            !draftState ? (
+              <p className="hint">Draft not initialized yet.</p>
+            ) : (
+              <>
+                {draftedKeepers.length > 0 && (
+                  <section className="card">
+                    <h3>🔒 Keepers</h3>
                     <div className="data-table-wrapper">
                       <table className="data-table">
-                        <thead><tr><th>#</th><th>Rd</th><th>Player</th><th>Pos</th><th>Team</th><th>Picked By</th></tr></thead>
+                        <thead><tr><th>Player</th><th>Pos</th><th>Team</th><th>Kept In Rd</th><th>Kept By</th></tr></thead>
                         <tbody>
-                          {draftedPicks.map(entry => (
-                            <tr key={entry.player.id}>
-                              <td className="pick-num">#{entry.overall}</td>
-                              <td>{entry.round}</td>
+                          {draftedKeepers.map((entry, i) => (
+                            <tr key={i}>
                               <td><strong>{entry.player.name}</strong></td>
                               <td><span className="badge">{entry.player.position}</span></td>
                               <td>{entry.player.team}</td>
+                              <td>{entry.round}</td>
                               <td>{entry.teamName}</td>
                             </tr>
                           ))}
                         </tbody>
                       </table>
                     </div>
-                  )
-                }
-              </section>
-            </>
+                  </section>
+                )}
+                <section className="card">
+                  <h3>📜 Draft Picks</h3>
+                  {draftedPicks.length === 0
+                    ? <p className="hint">No picks yet.</p>
+                    : (
+                      <div className="data-table-wrapper">
+                        <table className="data-table">
+                          <thead><tr><th>#</th><th>Rd</th><th>Player</th><th>Pos</th><th>Team</th><th>Picked By</th></tr></thead>
+                          <tbody>
+                            {draftedPicks.map(entry => (
+                              <tr key={entry.player.id}>
+                                <td className="pick-num">#{entry.overall}</td>
+                                <td>{entry.round}</td>
+                                <td><strong>{entry.player.name}</strong></td>
+                                <td><span className="badge">{entry.player.position}</span></td>
+                                <td>{entry.player.team}</td>
+                                <td>{entry.teamName}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )
+                  }
+                </section>
+              </>
+            )
           )}
         </div>
       )}
@@ -1822,6 +2063,7 @@ export default function App() {
       {/* ── TRADE ANALYZER TAB ───────────────────────────────────────────── */}
       {activeTab === 'trade' && (
         <TradeAnalyzer
+          key={sport}
           sport={sport}
           availablePlayers={
             isFootball(sport)

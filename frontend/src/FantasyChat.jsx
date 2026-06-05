@@ -31,7 +31,7 @@ function buildSystemPrompt(sport, myRoster, availablePlayers) {
   const rosterStr = (myRoster || []).map(p => playerSummary(p, sport)).join(', ');
   const topAvail = (availablePlayers || [])
     .filter(p => !myRoster?.some(r => (r.id ?? r.name) === (p.id ?? p.name)))
-    .slice(0, 40)
+    .slice(0, 20)
     .map(p => playerSummary(p, sport))
     .join(', ');
 
@@ -144,12 +144,11 @@ async function callChat(systemPrompt, history, userText) {
 // ─── FantasyChat component ────────────────────────────────────────────────────
 
 export default function FantasyChat({ sport, myRoster, availablePlayers }) {
-  const [messages, setMessages] = useState([
-    {
-      role: 'assistant',
-      content: `Hey! I'm your fantasy ${sport} assistant. Ask me anything:\n- *"Is this trade good for me?"*\n- *"Who should I pick up off waivers?"*\n- *"Is my team still looking strong?"*\n- *"Who are my best keepers?"*`,
-    },
-  ]);
+  const initialMessage = {
+    role: 'assistant',
+    content: `Hey! I'm your fantasy ${sport} assistant. Ask me anything:\n- *"Is this trade good for me?"*\n- *"Who should I pick up off waivers?"*\n- *"Is my team still looking strong?"*\n- *"Who are my best keepers?"*`,
+  };
+  const [messages, setMessages] = useState([initialMessage]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [aiAvailable, setAiAvailable] = useState(true);
@@ -209,14 +208,28 @@ export default function FantasyChat({ sport, myRoster, availablePlayers }) {
       <section className="card">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
           <h3 style={{ margin: 0 }}>💬 Fantasy Assistant</h3>
-          <span style={{
-            fontSize: '0.78em', padding: '3px 10px', borderRadius: 6,
-            background: aiAvailable ? '#f0fff4' : '#fffaf0',
-            color: aiAvailable ? '#276749' : '#744210',
-            border: `1px solid ${aiAvailable ? '#9ae6b4' : '#f6ad55'}`,
-          }}>
-            {aiAvailable ? '🤖 Gemini 2.0 Flash' : '📊 Rule-based mode'}
-          </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <button
+              onClick={() => setMessages([initialMessage])}
+              disabled={loading}
+              title="Clear chat history"
+              style={{
+                fontSize: '0.78em', padding: '3px 10px', borderRadius: 6,
+                background: '#fff5f5', color: '#c53030',
+                border: '1px solid #fed7d7', cursor: 'pointer',
+              }}
+            >
+              🗑 Clear
+            </button>
+            <span style={{
+              fontSize: '0.78em', padding: '3px 10px', borderRadius: 6,
+              background: aiAvailable ? '#f0fff4' : '#fffaf0',
+              color: aiAvailable ? '#276749' : '#744210',
+              border: `1px solid ${aiAvailable ? '#9ae6b4' : '#f6ad55'}`,
+            }}>
+              {aiAvailable ? '🤖 Gemini 2.0 Flash' : '📊 Rule-based mode'}
+            </span>
+          </div>
         </div>
 
         {/* Chat window */}
