@@ -150,13 +150,24 @@ public class MarkdownRankingsService {
      * Rough positional rank → estimated overall rank for a 12-team PPR draft.
      * Not precise — used as one of 5 composite inputs, so directional is enough.
      */
+    /**
+     * Converts a positional rank to an estimated overall draft pick, calibrated to
+     * ESPN PPR Top 300 patterns (Field Yates 2026). Used only as one of up to 7
+     * composite inputs — directional accuracy is sufficient, not exact.
+     *
+     * ESPN 2026 anchors:
+     *   RB1=1, RB3=3, RB4=6, RB6≈13, RB10≈22
+     *   WR1=4, WR2=5, WR3=8, WR4=9, WR5≈12, WR10≈28
+     *   QB1=7, QB2≈14, QB3≈22, QB5≈35
+     *   TE1=10, TE2≈19, TE3≈30, TE5≈50
+     */
     private int estimateOverall(String pos, int posRank) {
         return switch (pos) {
-            case "RB" -> posRank * 5;              // RB1≈5, RB10≈50
-            case "WR" -> posRank * 5 + 6;          // WR1≈11, WR10≈56
-            case "QB" -> posRank * 18;             // QB1≈18, QB5≈90
-            case "TE" -> posRank * 12 + 40;        // TE1≈52, TE5≈100
-            default   -> posRank * 8;
+            case "RB" -> posRank * 3;              // RB1≈3, RB5≈15, RB10≈30
+            case "WR" -> posRank * 3 + 2;          // WR1≈5, WR5≈17, WR10≈32
+            case "QB" -> posRank * 8;              // QB1≈8, QB2≈16 — ESPN QB1 goes 7th
+            case "TE" -> posRank * 9 + 1;          // TE1≈10, TE2≈19 — ESPN TE1 goes 10th
+            default   -> posRank * 6;
         };
     }
 

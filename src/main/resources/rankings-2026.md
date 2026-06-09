@@ -76,12 +76,14 @@ The app default is `ppr`. Switch to `espn_standard` in Settings if your league i
 | 12 | Rashee Rice | KC | 25 | Returns from injury |
 | 13 | DeVonta Smith | PHI | 28 | A.J. Brown gone → target share up |
 | 14 | Garrett Wilson | NYJ | 25 | QB upgrade needed |
-| 15 | Tee Higgins | CIN | 26 | Healthy + Burrow = WR1 weeks |
-| 16 | Zay Flowers | BAL | 25 | Big role in Baltimore offense |
-| 17 | Malik Nabers | NYG | 23 | Injury concern early 2026 |
-| 18 | Ladd McConkey | LAC | 24 | Slot monster |
-| 19 | Tetairoa McMillan | CAR | 22 | Rookie WR, top prospect |
-| 20 | Davante Adams | LAR | 34 | Age concern, still productive |
+| 15 | Brandon Aiyuk | SF | 27 | SF WR1 with Deebo gone; Purdy connection |
+| 16 | Tee Higgins | CIN | 26 | Healthy + Burrow = WR1 weeks |
+| 17 | Zay Flowers | BAL | 25 | Big role in Baltimore offense |
+| 18 | Malik Nabers | NYG | 23 | Injury concern early 2026 |
+| 19 | Stefon Diggs | FA | 32 | Top WR talent; unsigned as of June 2026 — monitor |
+| 20 | Ladd McConkey | LAC | 24 | Slot monster |
+| 21 | Tetairoa McMillan | CAR | 22 | Rookie WR, top prospect |
+| 22 | Davante Adams | LAR | 34 | Age concern, still productive |
 
 ### TE Rankings
 | Rank | Player | Team | Age | 2026 Notes |
@@ -149,6 +151,8 @@ The app default is `ppr`. Switch to `espn_standard` in Settings if your league i
 | Patrick Mahomes | QB | KC | 30 | QB8-12 | Aging curve starting |
 | CeeDee Lamb | WR | DAL | 27 | 8-15 | QB situation = risk |
 | Justin Jefferson | WR | MIN | 27 | 6-10 | Post-injury — monitor |
+| Brandon Aiyuk | WR | SF | 27 | 35-50 | SF WR1 post-Deebo; system dependent |
+| Stefon Diggs | WR | FA | 32 | 45-70 | Unsigned FA; elite talent, must-sign before drafting |
 
 ### Aging Curve Rules of Thumb
 - **RBs**: Significant decline risk after age 28. CMC (30), Henry (32), Barkley (29) are red flags.

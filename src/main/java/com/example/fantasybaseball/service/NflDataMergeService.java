@@ -36,6 +36,20 @@ public class NflDataMergeService {
     private static final int NFL_ID_OFFSET = 10_000;
     private static final int MAX_FP_ONLY_RANK = 250; // don't add FP-only players ranked beyond this
 
+    /**
+     * Players excluded from rankings regardless of what scrapers return.
+     * Use only for truly retired players with no NFL team — NOT for players whose
+     * composite rank is just inflated by one stale source. For rank correction,
+     * add the player to rankings-2026.md to anchor the composite.
+     * Keys must be normalized (lowercase, spaces only — same as normalize() output).
+     */
+    private static final Set<String> EXCLUDED_PLAYERS = Set.of(
+        // example: "vontaze burfict"  // retired 2019, occasionally surfaces in old data
+    );
+
+
+
+
     @Autowired private NflPlayerService       sleeperSvc;
     @Autowired private FantasyProsService     fpSvc;
     @Autowired private EspnAdpService         espnSvc;
@@ -85,6 +99,7 @@ public class NflDataMergeService {
         for (NflPlayerService.SleeperPlayer sp : sleeperPlayers) {
             String key = normalize(sp.fullName);
             if (addedKeys.contains(key)) continue;
+            if (EXCLUDED_PLAYERS.contains(key)) continue;
 
             Player p = buildPlayer(idCounter.getAndIncrement(), sp.fullName,
                     sp.team, normalizePosition(sp.position));
@@ -128,6 +143,7 @@ public class NflDataMergeService {
             if (rank.name == null || rank.rank > MAX_FP_ONLY_RANK) continue;
             String key = normalize(rank.name);
             if (addedKeys.contains(key)) continue;
+            if (EXCLUDED_PLAYERS.contains(key)) continue;
 
             Player p = buildPlayer(idCounter.getAndIncrement(), rank.name,
                     rank.team, normalizePosition(rank.position));

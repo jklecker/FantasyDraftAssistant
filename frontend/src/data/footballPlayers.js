@@ -17,6 +17,7 @@ export const TEAM_BYE_WEEKS = {
 export const PLAYER_STATUS = {
   9012: 'Questionable', // CMC — chronic injury risk
   9056: 'Questionable', // Kelce — age/durability concern at 37
+  9049: 'Questionable', // Stefon Diggs — unsigned FA as of June 2026; must sign before drafting
 };
 
 export const FOOTBALL_PLAYERS = [
@@ -188,10 +189,18 @@ export const FOOTBALL_PLAYERS = [
     stats: { receptions: 82, recYards: 1050, recTD: 7 },
     pff: { overallGrade: 82, receivingGrade: 83, snapShare: 84, yardsPerRouteRun: 2.1 },
     nextGen: { targetShare: 0.21, airYards: 1100, separation: 2.6, routeParticipation: 0.86 } },
+  { id: 9048, name: 'Brandon Aiyuk', position: 'WR', team: 'SF', adp: 45, age: 27,
+    stats: { receptions: 78, recYards: 1100, recTD: 8 },
+    pff: { overallGrade: 84, receivingGrade: 85, snapShare: 88, yardsPerRouteRun: 2.3 },
+    nextGen: { targetShare: 0.26, airYards: 1450, separation: 2.6, routeParticipation: 0.90 } },
   { id: 9044, name: 'Malik Nabers', position: 'WR', team: 'NYG', adp: 42, age: 23,
     stats: { receptions: 80, recYards: 1050, recTD: 7 },
     pff: { overallGrade: 82, receivingGrade: 83, snapShare: 82, yardsPerRouteRun: 2.0 },
     nextGen: { targetShare: 0.23, airYards: 1200, separation: 2.8, routeParticipation: 0.84 } },
+  { id: 9049, name: 'Stefon Diggs', position: 'WR', team: 'FA', adp: 55, age: 32,
+    stats: { receptions: 75, recYards: 950, recTD: 7 },
+    pff: { overallGrade: 83, receivingGrade: 84, snapShare: 85, yardsPerRouteRun: 2.1 },
+    nextGen: { targetShare: 0.22, airYards: 1100, separation: 2.7, routeParticipation: 0.87 } },
   { id: 9045, name: 'Ladd McConkey', position: 'WR', team: 'LAC', adp: 44, age: 24,
     stats: { receptions: 90, recYards: 1000, recTD: 7 },
     pff: { overallGrade: 81, receivingGrade: 82, snapShare: 84, yardsPerRouteRun: 2.0 },
