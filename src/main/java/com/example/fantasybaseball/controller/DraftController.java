@@ -60,6 +60,7 @@ public class DraftController {
             teams.add(t);
         }
         draftService.initializeDraft(teams, players, request.isSnakeOrder());
+        draftService.getDraftState().setSport("baseball");
         return ResponseEntity.ok(draftService.getDraftState());
     }
 
@@ -101,7 +102,9 @@ public class DraftController {
     public ResponseEntity<DraftState> autoInitialize(
             @RequestParam(defaultValue = "12") int numTeams,
             @RequestParam(defaultValue = "baseball") String sport) {
-        if (!draftService.isDraftInitialized()) {
+        boolean sportMismatch = draftService.isDraftInitialized()
+                && !sport.equalsIgnoreCase(draftService.getDraftState().getSport());
+        if (!draftService.isDraftInitialized() || sportMismatch) {
             List<Player> players = "football".equalsIgnoreCase(sport)
                     ? footballPlayerService.getPlayers()
                     : playerPoolService.getAllPlayers();
@@ -113,6 +116,7 @@ public class DraftController {
                 teams.add(t);
             }
             draftService.initializeDraft(teams, players, true);
+            draftService.getDraftState().setSport(sport.toLowerCase());
         }
         return ResponseEntity.ok(draftService.getDraftState());
     }

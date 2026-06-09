@@ -10,7 +10,10 @@ import com.example.fantasybaseball.service.MarkdownRankingsService;
 import com.example.fantasybaseball.service.NflDataMergeService;
 import com.example.fantasybaseball.service.NflPlayerService;
 import com.example.fantasybaseball.service.YahooBooneService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -20,6 +23,8 @@ import java.util.Map;
 @RestController
 @RequestMapping("/nfl")
 public class NflController {
+
+    private static final Logger log = LoggerFactory.getLogger(NflController.class);
 
     @Autowired private NflDataMergeService    mergeService;
     @Autowired private NflPlayerService       sleeperService;
@@ -36,9 +41,14 @@ public class NflController {
      * Returns merged player pool with rankings, ADP, and season projections.
      */
     @GetMapping("/players")
-    public List<Player> getPlayers(
+    public ResponseEntity<List<Player>> getPlayers(
             @RequestParam(defaultValue = "ppr") String scoring) {
-        return mergeService.getMergedPlayers(scoring);
+        try {
+            return ResponseEntity.ok(mergeService.getMergedPlayers(scoring));
+        } catch (Exception e) {
+            log.error("getMergedPlayers failed: {}", e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
+        }
     }
 
     /**

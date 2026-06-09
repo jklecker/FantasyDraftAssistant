@@ -5,9 +5,13 @@ import { TEAM_BYE_WEEKS, PLAYER_STATUS } from '../data/footballPlayers.js';
 
 const REPLACEMENT_LEVEL = SPORTS.football.replacementLevel;
 
-export function normalizeFootballPlayer(raw, scoringPreset = 'ppr', rank = 0, posRank = 0, vbd = 0, baseline = 0) {
+export function normalizeFootballPlayer(raw, scoringPreset = 'ppr', rank = 0, posRank = 0, vbd = 0, baseline = 0, ptsOverride = null) {
   const scoring = FOOTBALL_SCORING_PRESETS[scoringPreset] ?? FOOTBALL_SCORING_PRESETS.ppr;
-  const fantasyPoints = calculateFantasyPoints(raw.stats ?? {}, scoring);
+  // Prefer the precomputed _pts (which already applied the ADP-synthetic fallback)
+  // over re-deriving it from raw.stats, which would return 0 when stats are empty.
+  const fantasyPoints = ptsOverride != null
+    ? ptsOverride
+    : calculateFantasyPoints(raw.stats ?? {}, scoring);
 
   return {
     id: raw.id,
@@ -55,12 +59,40 @@ export function normalizeFootballPlayers(rawPlayers, scoringPreset = 'ppr') {
 
   const scoring = FOOTBALL_SCORING_PRESETS[scoringPreset] ?? FOOTBALL_SCORING_PRESETS.ppr;
 
-  const withPts = rawPlayers.map(p => ({
-    ...p,
-    byeWeek: p.byeWeek ?? TEAM_BYE_WEEKS[p.team] ?? null,
-    status: p.status ?? PLAYER_STATUS[p.id] ?? 'Active',
-    _pts: calculateFantasyPoints(p.stats ?? {}, scoring),
-  }));
+  // Effective ADP for ranking/_pts: prefer real ADP, then any nextGen ranking signal.
+  // Backend often returns adp=null for most players but populates nextGen.espnAdp,
+  // overallRank, berryRank, or compositeRank — use whichever exists so VBD is meaningful.
+  const effectiveAdp = (p) => {
+    const candidates = [
+      p.adp,
+      p.nextGen?.espnAdp,
+      p.nextGen?.overallRank,
+      p.nextGen?.berryRank,
+      p.nextGen?.compositeRank,
+    ];
+    for (const c of candidates) {
+      if (c != null && Number.isFinite(+c) && +c > 0) return +c;
+    }
+    return null;
+  };
+
+  const withPts = rawPlayers.map(p => {
+    const eAdp = effectiveAdp(p);
+    return {
+      ...p,
+      byeWeek: p.byeWeek ?? TEAM_BYE_WEEKS[p.team] ?? null,
+      status: p.status ?? PLAYER_STATUS[p.id] ?? 'Active',
+      _effAdp: eAdp,
+      _pts: (() => {
+        const fromStats = calculateFantasyPoints(p.stats ?? {}, scoring);
+        if (fromStats > 0) return fromStats;
+        const fromBackend = p.nextGen?.projectedPoints ?? 0;
+        if (fromBackend > 0) return fromBackend;
+        // ADP-based synthetic: linear decay. ADP 1 ≈ 600 pts, ADP 333 ≈ 0.
+        return Math.max(0, 600 - (eAdp ?? 500) * 1.8);
+      })(),
+    };
+  });
 
   // Compute VBD baseline per position: the projected points of the replacement-level player.
   // Replacement level = the Nth best player (last starter across all 12 teams).
@@ -86,7 +118,7 @@ export function normalizeFootballPlayers(rawPlayers, scoringPreset = 'ppr') {
 
   const sorted = [...withVBD].sort((a, b) => {
     if (b._vbd !== a._vbd) return b._vbd - a._vbd;
-    return (a.adp ?? 999) - (b.adp ?? 999);
+    return (a._effAdp ?? a.adp ?? 999) - (b._effAdp ?? b.adp ?? 999);
   });
 
   const posCounters = {};
@@ -94,7 +126,10 @@ export function normalizeFootballPlayers(rawPlayers, scoringPreset = 'ppr') {
     const pos = p.position;
     posCounters[pos] = posCounters[pos] ?? 0;
     const posRank = posCounters[pos]++;
-    const { _pts, _vbd, ...raw } = p;
-    return normalizeFootballPlayer(raw, scoringPreset, i, posRank, _vbd, baselines[pos] ?? 0);
+    const { _pts, _vbd, _effAdp, ...raw } = p;
+    // Promote effective ADP into raw so the display ADP isn't null for the ~99% of
+    // players the backend doesn't populate adp for.
+    if (_effAdp != null && (raw.adp == null || raw.adp <= 0)) raw.adp = _effAdp;
+    return normalizeFootballPlayer(raw, scoringPreset, i, posRank, _vbd, baselines[pos] ?? 0, _pts);
   });
 }

@@ -12,6 +12,7 @@ export default defineConfig({
       '/players': { target: 'http://localhost:8080', changeOrigin: true },
       '/ping':    { target: 'http://localhost:8080', changeOrigin: true },
       '/nfl':     { target: 'http://localhost:8080', changeOrigin: true },
+      '/api':     { target: 'http://localhost:8080', changeOrigin: true },
     },
   },
   build: {

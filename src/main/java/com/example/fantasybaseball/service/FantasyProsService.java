@@ -1,5 +1,6 @@
 package com.example.fantasybaseball.service;
 
+import org.jsoup.HttpStatusException;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
@@ -100,6 +101,13 @@ public class FantasyProsService {
                         .ignoreHttpErrors(false)
                         .get()
                         .html();
+            } catch (HttpStatusException e) {
+                last = e;
+                // 4xx (except 429 rate-limit) won't improve with retries — bail immediately
+                if (e.getStatusCode() >= 400 && e.getStatusCode() != 429 && e.getStatusCode() < 500) {
+                    throw e;
+                }
+                log.debug("FP fetch attempt {} failed ({}): {}", i + 1, e.getStatusCode(), e.getMessage());
             } catch (Exception e) {
                 last = e;
                 log.debug("FP fetch attempt {} failed: {}", i + 1, e.getMessage());
@@ -119,6 +127,12 @@ public class FantasyProsService {
                         .timeout(TIMEOUT_MS)
                         .ignoreHttpErrors(false)
                         .get();
+            } catch (HttpStatusException e) {
+                last = e;
+                if (e.getStatusCode() >= 400 && e.getStatusCode() != 429 && e.getStatusCode() < 500) {
+                    throw e;
+                }
+                log.debug("FP doc fetch attempt {} failed ({}): {}", i + 1, e.getStatusCode(), e.getMessage());
             } catch (Exception e) {
                 last = e;
                 log.debug("FP doc fetch attempt {} failed: {}", i + 1, e.getMessage());

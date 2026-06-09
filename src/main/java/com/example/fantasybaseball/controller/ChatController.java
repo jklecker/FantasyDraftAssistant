@@ -47,7 +47,15 @@ public class ChatController {
                     .build();
 
             HttpResponse<String> res = http.send(req, HttpResponse.BodyHandlers.ofString());
-            return ResponseEntity.status(res.statusCode()).body(res.body());
+            // Pass 200 and 429 (rate-limit) through as-is. Everything else
+            // (403 Zscaler block, 401 bad key, 5xx, etc.) becomes 503 so
+            // the frontend knows to fall back to rule-based analysis.
+            int status = res.statusCode();
+            if (status == 200 || status == 429) {
+                return ResponseEntity.status(status).body(res.body());
+            }
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                    .body("{\"error\":\"AI service unavailable (upstream " + status + ").\"}");
 
         } catch (IOException | InterruptedException e) {
             Thread.currentThread().interrupt();

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import Fuse from 'fuse.js';
 import { getSportConfig, isFootball } from './config/sportConfig.js';
 import { FOOTBALL_PRESET_LIST, CUSTOM_SCORING_KEYS } from './config/scoringSystems.js';
@@ -146,6 +146,20 @@ export default function App() {
     try { return Number(window.localStorage.getItem('footballTeamSize')) || 12; } catch (_) { return 12; }
   });
 
+  // ── Cheat Sheet state (independent draft tracker for ESPN/Yahoo users) ──
+  const [cheatPicks, setCheatPicks] = useState(() => {
+    try {
+      const raw = window.localStorage.getItem('cheatPicks');
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (_) { return []; }
+  });
+  const [csMyTeam, setCsMyTeam] = useState(() => {
+    try { return Number(window.localStorage.getItem('csMyTeam')) || 1; } catch (_) { return 1; }
+  });
+  const [csPosFilter, setCsPosFilter] = useState('ALL');
+  const [csSearch, setCsSearch] = useState('');
+
   const [activeTab, setActiveTab]   = useState('draft');
   const [draftState, setDraftState] = useState(null);
   const [currentTeam, setCurrentTeam] = useState(null);
@@ -225,20 +239,19 @@ export default function App() {
 
   const loadState = useCallback(async () => {
     try {
-      const state = await apiFetch('/draft/state');
+      // Always call auto-initialize with the current sport so the backend
+      // re-initializes if a stale state from a different sport is present.
+      const state = await apiFetch(`/draft/auto-initialize?sport=${sport}`, { method: 'POST' });
       setDraftState(state);
       buildFuseIndex(state);
     } catch (_) {
-      // Draft not initialized on the backend (e.g. after a Render restart).
-      // Auto-initialize with 12 default teams so the app is immediately usable.
       try {
-        const state = await apiFetch(`/draft/auto-initialize?sport=${sport}`, { method: 'POST' });
+        const state = await apiFetch('/draft/state');
         setDraftState(state);
         buildFuseIndex(state);
-        setStatusMsg('✅ Draft auto-initialized with 12 teams (Team 1–12). Keepers are optional.');
       } catch (_2) { /* ignore */ }
     }
-  }, []);
+  }, [sport]);
 
   const loadCurrentTeam = useCallback(async () => {
     try { setCurrentTeam(await apiFetch('/draft/current-team')); } catch (_) {}
@@ -398,6 +411,12 @@ export default function App() {
   useEffect(() => {
     try { window.localStorage.setItem('footballScoringPreset', footballScoringPreset); } catch (_) {}
   }, [footballScoringPreset]);
+  useEffect(() => {
+    try { window.localStorage.setItem('cheatPicks', JSON.stringify(cheatPicks)); } catch (_) {}
+  }, [cheatPicks]);
+  useEffect(() => {
+    try { window.localStorage.setItem('csMyTeam', String(csMyTeam)); } catch (_) {}
+  }, [csMyTeam]);
 
   // Fetch live NFL players when sport switches to football or scoring changes
   useEffect(() => {
@@ -424,7 +443,15 @@ export default function App() {
 
     // Use API data only when FantasyPros rankings are present (adp populated).
     // Off-season / blocked: fall back to mock data which has real projections.
-    const hasRealRankings = footballPlayers.some(p => p.adp != null && p.adp > 0);
+    const hasRealRankings = footballPlayers.some(p =>
+      (p.adp != null && p.adp > 0)
+      || (p.nextGen && (
+        (p.nextGen.espnAdp != null && p.nextGen.espnAdp > 0)
+        || (p.nextGen.overallRank != null && p.nextGen.overallRank > 0)
+        || (p.nextGen.berryRank != null && p.nextGen.berryRank > 0)
+        || (p.nextGen.compositeRank != null && p.nextGen.compositeRank > 0)
+      ))
+    );
     const sourceData = hasRealRankings ? footballPlayers : FOOTBALL_PLAYERS;
 
     const allNormalized = normalizeFootballPlayers(sourceData, normalizeKey);
@@ -433,9 +460,14 @@ export default function App() {
       isDrafted: footballDraftedIds.includes(p.id),
       projections: {
         ...p.projections,
-        fantasyPoints: activeScoringSettings
-          ? calculateFantasyPoints(p.stats ?? {}, activeScoringSettings)
-          : (p.nextGen?.projectedPoints ?? p.projections?.fantasyPoints ?? 0),
+        fantasyPoints: (() => {
+          if (activeScoringSettings) {
+            const fromStats = calculateFantasyPoints(p.stats ?? {}, activeScoringSettings);
+            if (fromStats > 0) return fromStats;
+          }
+          // Fall back to whatever the adapter computed (may be ADP-synthetic)
+          return p.projections?.fantasyPoints ?? 0;
+        })(),
       },
     }));
     const currentOverallPick = footballDraftedIds.length + 1;
@@ -804,13 +836,14 @@ export default function App() {
 
       <nav className="tabs" role="tablist">
         {[
-          { id: 'draft',   label: '📋 Draft Board' },
-          { id: 'recs',    label: '🎯 My Picks' },
-          { id: 'keepers', label: '🔒 Keepers (optional)' },
-          { id: 'drafted', label: '📜 Drafted' },
-          { id: 'trade',   label: '🔄 Trade Analyzer' },
-          { id: 'chat',    label: '💬 Assistant' },
-          { id: 'settings', label: '⚙️ Scoring/Settings' },
+          { id: 'draft',      label: '📋 Draft Board' },
+          { id: 'recs',      label: '🎯 My Picks' },
+          ...(isFootball(sport) ? [{ id: 'cheatsheet', label: '🗒️ Cheat Sheet' }] : []),
+          { id: 'keepers',   label: '🔒 Keepers (optional)' },
+          { id: 'drafted',   label: '📜 Drafted' },
+          { id: 'trade',     label: '🔄 Trade Analyzer' },
+          { id: 'chat',      label: '💬 Assistant' },
+          { id: 'settings',  label: '⚙️ Scoring/Settings' },
         ].map(({ id, label }) => (
           <button
             key={id}
@@ -853,9 +886,10 @@ export default function App() {
           <div className="more-sheet">
             <h4>More</h4>
             {[
-              { id: 'keepers',  icon: '🔒', label: 'Keepers',        desc: 'Optional' },
-              { id: 'trade',    icon: '🔄', label: 'Trade Analyzer',  desc: '' },
-              { id: 'settings', icon: '⚙️', label: 'Settings',        desc: '' },
+              ...(isFootball(sport) ? [{ id: 'cheatsheet', icon: '🗒️', label: 'Cheat Sheet', desc: 'ESPN/Yahoo companion' }] : []),
+              { id: 'keepers',   icon: '🔒', label: 'Keepers',         desc: 'Optional' },
+              { id: 'trade',     icon: '🔄', label: 'Trade Analyzer',   desc: '' },
+              { id: 'settings',  icon: '⚙️', label: 'Settings',         desc: '' },
             ].map(({ id, icon, label, desc }) => (
               <button
                 key={id}
@@ -2060,6 +2094,320 @@ export default function App() {
         </div>
       )}
 
+      {/* ── CHEAT SHEET TAB ─────────────────────────────────────────────── */}
+      {activeTab === 'cheatsheet' && isFootball(sport) && (() => {
+        // ── helpers scoped to this render ──────────────────────────────────
+        const csTeamCount = footballTeamSize;
+        const csTotalPicks = cheatPicks.length;
+        const csCurrentPick = csTotalPicks + 1;
+        const csCurrentRound = Math.ceil(csCurrentPick / csTeamCount);
+        const csPickInRound  = ((csCurrentPick - 1) % csTeamCount) + 1;
+        const csOnClock = csCurrentRound % 2 === 0
+          ? csTeamCount - csPickInRound + 1
+          : csPickInRound;
+
+        // next pick for my team
+        let csMyNextPick = null;
+        for (let p = csCurrentPick + 1; p <= csTeamCount * 20; p++) {
+          const r   = Math.ceil(p / csTeamCount);
+          const pip = ((p - 1) % csTeamCount) + 1;
+          const t   = r % 2 === 0 ? csTeamCount - pip + 1 : pip;
+          if (t === csMyTeam) { csMyNextPick = p; break; }
+        }
+
+        // player pool: use engine if loaded, else normalize mock data
+        const normalizeKey = footballScoringPreset === 'custom' ? 'ppr' : footballScoringPreset;
+        const csAllPlayers = footballEngine?.players
+          || normalizeFootballPlayers(FOOTBALL_PLAYERS, normalizeKey);
+
+        // per-team rosters
+        const csRosters = {};
+        for (let t = 1; t <= csTeamCount; t++) csRosters[t] = [];
+        cheatPicks.forEach(cp => {
+          const p = csAllPlayers.find(pl => pl.id === cp.playerId);
+          if (p) csRosters[cp.teamSlot]?.push(p);
+        });
+
+        const completedRounds = Math.ceil(csTotalPicks / csTeamCount) - (csTotalPicks % csTeamCount === 0 && csTotalPicks > 0 ? 0 : 1);
+        const needLevel = (t, pos) => {
+          const cnt = (csRosters[t] || []).filter(p => p.position === pos).length;
+          if (completedRounds < 2) return 'ok';
+          if (pos === 'QB') return cnt === 0 && completedRounds >= 6 ? 'urgent' : 'ok';
+          if (pos === 'RB') return cnt === 0 ? (completedRounds >= 3 ? 'urgent' : 'warn') : cnt < 2 && completedRounds >= 5 ? 'warn' : 'ok';
+          if (pos === 'WR') return cnt === 0 ? (completedRounds >= 3 ? 'urgent' : 'warn') : cnt < 2 && completedRounds >= 5 ? 'warn' : 'ok';
+          if (pos === 'TE') return cnt === 0 && completedRounds >= 7 ? 'urgent' : 'ok';
+          return 'ok';
+        };
+
+        // pickMap for fast lookup
+        const csPickMap = {};
+        cheatPicks.forEach(cp => { csPickMap[cp.playerId] = cp; });
+
+        // filtered player list
+        const draftedSet = new Set(cheatPicks.map(cp => cp.playerId));
+        let csFiltered = csAllPlayers;
+        if (csPosFilter !== 'ALL') {
+          csFiltered = csFiltered.filter(p =>
+            csPosFilter === 'DST' ? (p.position === 'DST' || p.position === 'DEF') : p.position === csPosFilter
+          );
+        }
+        if (csSearch.trim()) {
+          const q = csSearch.toLowerCase();
+          csFiltered = csFiltered.filter(p =>
+            p.name.toLowerCase().includes(q) || (p.team || '').toLowerCase().includes(q)
+          );
+        }
+        const csAvailable = csFiltered.filter(p => !draftedSet.has(p.id));
+        const csDrafted    = csFiltered.filter(p => draftedSet.has(p.id));
+        const showLimit = csSearch.trim() || csPosFilter !== 'ALL' ? 150 : 60;
+
+        const cellStyle = (t) => ({
+          padding: '2px 4px', textAlign: 'center',
+          borderLeft:  t === csMyTeam ? '2px solid #bee3f8' : '1px solid #f0f4ff',
+          borderRight: t === csMyTeam ? '2px solid #bee3f8' : '',
+        });
+
+        return (
+          <div className="tab-content" data-testid="cheatsheet-tab">
+            {/* ── Controls ────────────────────────────────────────────── */}
+            <section className="card">
+              <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap', marginBottom:8 }}>
+                <h3 style={{ margin:0 }}>🗒️ Draft Cheat Sheet</h3>
+                <span style={{ color:'#718096', fontSize:'0.82em' }}>Track all picks while drafting on ESPN/Yahoo</span>
+              </div>
+              <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' }}>
+                <label style={{ fontSize:'0.9em', fontWeight:600 }}>My team slot:</label>
+                <select value={csMyTeam} onChange={e => setCsMyTeam(Number(e.target.value))}
+                  style={{ padding:'3px 8px', borderRadius:6, fontSize:'0.9em' }}>
+                  {Array.from({ length: csTeamCount }, (_, i) => (
+                    <option key={i+1} value={i+1}>Team {i+1}</option>
+                  ))}
+                </select>
+                <span style={{ color:'#718096', fontSize:'0.82em' }}>
+                  ({csTeamCount} teams · {footballScoringPreset.toUpperCase()})
+                </span>
+                <div style={{ marginLeft:'auto', display:'flex', gap:6 }}>
+                  {csTotalPicks > 0 && (
+                    <button onClick={() => setCheatPicks(p => p.slice(0, -1))}
+                      style={{ padding:'3px 10px', borderRadius:6, fontSize:'0.82em',
+                        background:'#f7fafc', color:'#4a5568', border:'1px solid #e2e8f0', cursor:'pointer' }}>
+                      ↩ Undo
+                    </button>
+                  )}
+                  <button onClick={() => { if (window.confirm('Reset all cheat sheet picks?')) setCheatPicks([]); }}
+                    style={{ padding:'3px 10px', borderRadius:6, fontSize:'0.82em',
+                      background:'#fff5f5', color:'#c53030', border:'1px solid #fed7d7', cursor:'pointer' }}>
+                    🗑 Reset
+                  </button>
+                </div>
+              </div>
+
+              {/* On the clock */}
+              <div style={{
+                marginTop:10, padding:'8px 12px', borderRadius:8,
+                background: csOnClock === csMyTeam ? '#f0fff4' : '#ebf8ff',
+                border: `1px solid ${csOnClock === csMyTeam ? '#9ae6b4' : '#bee3f8'}`,
+                display:'flex', alignItems:'center', gap:14, flexWrap:'wrap',
+              }}>
+                <div>
+                  <strong>Round {csCurrentRound} · Pick #{csCurrentPick}</strong>
+                  {' — '}
+                  <span style={{ fontWeight:700, color: csOnClock === csMyTeam ? '#276749' : '#2b6cb0', fontSize:'1.05em' }}>
+                    {csOnClock === csMyTeam ? `⭐ YOUR PICK (Team ${csOnClock})` : `Team ${csOnClock} is on the clock`}
+                  </span>
+                </div>
+                {csMyNextPick && csOnClock !== csMyTeam && (
+                  <span style={{ color:'#718096', fontSize:'0.85em' }}>
+                    Your next pick: #{csMyNextPick} ({csMyNextPick - csCurrentPick} picks away)
+                  </span>
+                )}
+              </div>
+            </section>
+
+            {/* ── Team Needs Grid ──────────────────────────────────────── */}
+            {csTotalPicks > 0 && (
+              <section className="card" style={{ padding:'12px 14px', overflowX:'auto' }}>
+                <h4 style={{ margin:'0 0 8px', fontSize:'0.9em', color:'#4a5568' }}>📊 Team Positional Needs</h4>
+                <table style={{ borderCollapse:'collapse', fontSize:'0.82em', minWidth: csTeamCount * 42 }}>
+                  <thead>
+                    <tr>
+                      <th style={{ padding:'3px 6px', textAlign:'left', color:'#718096', width:36 }}>Pos</th>
+                      {Array.from({ length: csTeamCount }, (_, i) => {
+                        const t = i + 1;
+                        return (
+                          <th key={t} style={{
+                            padding:'3px 4px', textAlign:'center', minWidth:38,
+                            background: t === csMyTeam ? '#ebf8ff' : t === csOnClock ? '#fffff0' : '',
+                            color: t === csMyTeam ? '#2b6cb0' : '#4a5568',
+                            fontWeight: t === csMyTeam ? 700 : 400,
+                            borderBottom: t === csMyTeam ? '2px solid #3182ce' : '1px solid #e2e8f0',
+                          }}>
+                            T{t}{t === csOnClock ? '⏰' : ''}
+                          </th>
+                        );
+                      })}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {['QB','RB','WR','TE'].map(pos => (
+                      <tr key={pos}>
+                        <td style={{ padding:'3px 6px', fontWeight:700, color:'#4a5568' }}>{pos}</td>
+                        {Array.from({ length: csTeamCount }, (_, i) => {
+                          const t   = i + 1;
+                          const cnt = (csRosters[t] || []).filter(p => p.position === pos).length;
+                          const lvl = needLevel(t, pos);
+                          return (
+                            <td key={t} style={{
+                              ...cellStyle(t),
+                              background: lvl === 'urgent' ? '#fff5f5' : lvl === 'warn' ? '#fffaf0' : '',
+                              color: lvl === 'urgent' ? '#c53030' : lvl === 'warn' ? '#c05621' : '#2d3748',
+                              fontWeight: lvl !== 'ok' ? 700 : 400,
+                            }}>
+                              {cnt}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                    <tr style={{ borderTop:'2px solid #e2e8f0' }}>
+                      <td style={{ padding:'3px 6px', fontWeight:700, color:'#a0aec0', fontSize:'0.8em' }}>Picks</td>
+                      {Array.from({ length: csTeamCount }, (_, i) => {
+                        const t = i + 1;
+                        return (
+                          <td key={t} style={{ ...cellStyle(t), color:'#718096', fontSize:'0.8em' }}>
+                            {(csRosters[t] || []).length}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  </tbody>
+                </table>
+                <p style={{ margin:'5px 0 0', fontSize:'0.72em', color:'#a0aec0' }}>
+                  🟥 urgent need · 🟧 thin · Blue column = your team · ⏰ = on the clock
+                </p>
+              </section>
+            )}
+
+            {/* ── Player List ──────────────────────────────────────────── */}
+            <section className="card">
+              <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:10, flexWrap:'wrap' }}>
+                <h3 style={{ margin:0 }}>👤 Player Pool</h3>
+                <input value={csSearch} onChange={e => setCsSearch(e.target.value)}
+                  placeholder="Search player…"
+                  style={{ padding:'4px 10px', borderRadius:6, border:'1px solid #e2e8f0', fontSize:'0.9em', width:150 }}
+                />
+                {['ALL','QB','RB','WR','TE','K','DST'].map(pos => (
+                  <button key={pos} onClick={() => setCsPosFilter(pos)} style={{
+                    padding:'2px 9px', borderRadius:12, fontSize:'0.8em', cursor:'pointer',
+                    background: csPosFilter === pos ? '#3182ce' : '#f7fafc',
+                    color:      csPosFilter === pos ? '#fff' : '#4a5568',
+                    border: `1px solid ${csPosFilter === pos ? '#3182ce' : '#e2e8f0'}`,
+                    fontWeight: csPosFilter === pos ? 700 : 400,
+                  }}>
+                    {pos}
+                  </button>
+                ))}
+              </div>
+
+              <div className="data-table-wrapper">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>#</th><th>Player</th><th>Pos</th><th>NFL</th><th>Proj Pts</th>
+                      <th>
+                        Mark Drafted
+                        <span style={{ marginLeft:5, fontSize:'0.75em', color:'#a0aec0', fontWeight:400 }}>
+                          📌 = Team {csOnClock} (clock)
+                        </span>
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {csAvailable.slice(0, showLimit).map((p, i) => {
+                      const pts = p.projectedPoints ?? p.vbd ?? 0;
+                      return (
+                        <tr key={p.id}>
+                          <td style={{ color:'#a0aec0', fontSize:'0.8em' }}>{i + 1}</td>
+                          <td><strong>{p.name}</strong></td>
+                          <td><span className="badge">{p.position}</span></td>
+                          <td style={{ color:'#718096', fontSize:'0.85em' }}>{p.team}</td>
+                          <td style={{ color:'#4a5568', fontSize:'0.85em' }}>{pts > 0 ? pts.toFixed(1) : '—'}</td>
+                          <td>
+                            <div style={{ display:'flex', gap:4 }}>
+                              <button
+                                onClick={() => setCheatPicks(prev => [...prev, { playerId: p.id, teamSlot: csOnClock, overall: prev.length + 1 }])}
+                                title={`Mark as picked by Team ${csOnClock} (on clock)`}
+                                style={{ padding:'2px 8px', borderRadius:4, fontSize:'0.78em', cursor:'pointer',
+                                  background: csOnClock === csMyTeam ? '#c6f6d5' : '#ebf8ff',
+                                  color:      csOnClock === csMyTeam ? '#276749' : '#2b6cb0',
+                                  border: `1px solid ${csOnClock === csMyTeam ? '#9ae6b4' : '#bee3f8'}`,
+                                  fontWeight:600 }}>
+                                📌 T{csOnClock}
+                              </button>
+                              <select defaultValue=""
+                                onChange={e => {
+                                  if (!e.target.value) return;
+                                  const t = Number(e.target.value);
+                                  setCheatPicks(prev => [...prev, { playerId: p.id, teamSlot: t, overall: prev.length + 1 }]);
+                                  e.target.value = '';
+                                }}
+                                style={{ padding:'2px 4px', borderRadius:4, fontSize:'0.78em', border:'1px solid #e2e8f0', cursor:'pointer' }}>
+                                <option value="">→ Team…</option>
+                                {Array.from({ length: csTeamCount }, (_, idx) => (
+                                  <option key={idx+1} value={idx+1}>
+                                    {idx + 1 === csMyTeam ? `⭐ Me (T${idx+1})` : `Team ${idx+1}`}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {csDrafted.length > 0 && (
+                      <>
+                        <tr>
+                          <td colSpan={6} style={{ padding:'6px 6px 2px', color:'#a0aec0', fontSize:'0.78em', fontStyle:'italic' }}>
+                            — Drafted ({csDrafted.length}) —
+                          </td>
+                        </tr>
+                        {csDrafted.map(p => {
+                          const pick = csPickMap[p.id];
+                          const pts  = p.projectedPoints ?? p.vbd ?? 0;
+                          return (
+                            <tr key={p.id} style={{ opacity:0.4, background:'#f7fafc' }}>
+                              <td style={{ color:'#a0aec0', fontSize:'0.8em' }}>#{pick.overall}</td>
+                              <td><strong style={{ textDecoration:'line-through' }}>{p.name}</strong></td>
+                              <td><span className="badge">{p.position}</span></td>
+                              <td style={{ color:'#718096', fontSize:'0.85em' }}>{p.team}</td>
+                              <td style={{ color:'#a0aec0', fontSize:'0.85em' }}>{pts > 0 ? pts.toFixed(1) : '—'}</td>
+                              <td>
+                                <span style={{
+                                  fontSize:'0.78em', padding:'2px 8px', borderRadius:4,
+                                  background: pick.teamSlot === csMyTeam ? '#c6f6d5' : '#e2e8f0',
+                                  color:      pick.teamSlot === csMyTeam ? '#276749' : '#4a5568',
+                                }}>
+                                  {pick.teamSlot === csMyTeam ? `⭐ Mine` : `Team ${pick.teamSlot}`}
+                                </span>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              {!csSearch.trim() && csPosFilter === 'ALL' && csAvailable.length > showLimit && (
+                <p style={{ margin:'6px 0 0', fontSize:'0.78em', color:'#a0aec0' }}>
+                  Showing top {showLimit} available — use position filter or search to see more.
+                </p>
+              )}
+            </section>
+          </div>
+        );
+      })()}
+
       {/* ── TRADE ANALYZER TAB ───────────────────────────────────────────── */}
       {activeTab === 'trade' && (
         <TradeAnalyzer
@@ -2075,21 +2423,27 @@ export default function App() {
       )}
 
       {/* ── CHAT TAB ────────────────────────────────────────────────────── */}
-      {activeTab === 'chat' && (
-        <FantasyChat
-          sport={sport}
-          myRoster={
-            isFootball(sport)
-              ? (footballEngine?.players?.filter(p => p.isDrafted) ?? [])
-              : (myTeam?.roster ?? [])
-          }
-          availablePlayers={
-            isFootball(sport)
-              ? (footballEngine?.players?.filter(p => !p.isDrafted) ?? [])
-              : (draftState?.availablePlayers ?? [])
-          }
-        />
-      )}
+      {activeTab === 'chat' && (() => {
+        // For football, MY roster = only picks where teamSlot matches my draft position.
+        // Without this filter the chat would treat every drafted player as "mine".
+        const myFootballPickIds = isFootball(sport)
+          ? new Set(footballPicks.filter(p => p.teamSlot === footballTeamPos).map(p => p.playerId))
+          : null;
+        const myFootballRoster = isFootball(sport)
+          ? (footballEngine?.players?.filter(p => myFootballPickIds.has(p.id)) ?? [])
+          : null;
+        return (
+          <FantasyChat
+            sport={sport}
+            myRoster={isFootball(sport) ? myFootballRoster : (myTeam?.roster ?? [])}
+            availablePlayers={
+              isFootball(sport)
+                ? (footballEngine?.players?.filter(p => !p.isDrafted) ?? [])
+                : (draftState?.availablePlayers ?? [])
+            }
+          />
+        );
+      })()}
 
       {/* ── SETTINGS TAB ────────────────────────────────────────────────── */}
       {activeTab === 'settings' && isFootball(sport) && (
