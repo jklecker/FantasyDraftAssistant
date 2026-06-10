@@ -129,7 +129,7 @@ export default function App() {
     } catch (_) { return []; }
   });
   const [footballBoardSearch, setFootballBoardSearch] = useState('');
-  const [footballBoardSort, setFootballBoardSort] = useState({ col: 'vbd', dir: 'desc' });
+  const [footballBoardSort, setFootballBoardSort] = useState({ col: 'adp', dir: 'asc' });
   const [footballPosFilter, setFootballPosFilter] = useState('QB');
   const [draftedChipsExpanded, setDraftedChipsExpanded] = useState(false);
   const [baseballBoardSearch, setBaseballBoardSearch] = useState('');

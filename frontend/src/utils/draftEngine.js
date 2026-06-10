@@ -12,12 +12,20 @@
  */
 
 /**
- * Primary sort score: VBD when available (football), else raw fantasy points (baseball).
- * VBD = projected points minus replacement-level baseline, so positional scarcity is
- * baked in — kickers/DST always rank last; elite RBs/WRs outrank QBs of similar raw pts.
+ * Primary sort score: ADP when stats are synthetic, VBD when real projections exist.
+ * When stats are null (off-season or API gaps), VBD is computed from ADP-synthetic pts
+ * which inflates TEs due to low replacement baselines. Use ADP directly in that case
+ * since it already encodes consensus expert opinion across position groups.
  */
 function primaryScore(player) {
-  return player.vbd ?? player.projections?.fantasyPoints ?? 0;
+  const hasRealStats = Object.keys(player.projections?.rawStats ?? {}).length > 0;
+  if (hasRealStats) {
+    // Real projections — use VBD (positional scarcity-adjusted value)
+    return player.vbd ?? player.projections?.fantasyPoints ?? 0;
+  }
+  // Synthetic/no stats — sort by consensus ADP ascending (invert so higher score = better)
+  const adp = player.adp ?? player.rankings?.overall ?? 999;
+  return 10000 - adp * 10;
 }
 
 /**

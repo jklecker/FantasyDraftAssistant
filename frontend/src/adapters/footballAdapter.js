@@ -76,13 +76,29 @@ export function normalizeFootballPlayers(rawPlayers, scoringPreset = 'ppr') {
     return null;
   };
 
+  // Trusted consensus rank used ONLY for sort ordering (not for display ADP).
+  // Preference order: FP ECR adp (best overall consensus) → compositeRank (Berry + scrapers)
+  // → espnAdp (ESPN scraper, can be stale/off for individual players).
+  // espnAdp is last because the scraper sometimes returns inflated values (e.g. QB espnAdp=43/69
+  // when actual ESPN rankings have them at 7/14). compositeRank is more stable.
+  const trustedAdp = (p) => {
+    if (p.adp != null && Number.isFinite(+p.adp) && +p.adp > 0) return +p.adp;
+    const composite = p.nextGen?.compositeRank;
+    if (composite != null && Number.isFinite(+composite) && +composite > 0) return +composite;
+    const espn = p.nextGen?.espnAdp;
+    if (espn != null && Number.isFinite(+espn) && +espn > 0) return +espn;
+    return null;
+  };
+
   const withPts = rawPlayers.map(p => {
     const eAdp = effectiveAdp(p);
+    const tAdp = trustedAdp(p);
     return {
       ...p,
       byeWeek: p.byeWeek ?? TEAM_BYE_WEEKS[p.team] ?? null,
       status: p.status ?? PLAYER_STATUS[p.id] ?? 'Active',
       _effAdp: eAdp,
+      _trustedAdp: tAdp,
       _pts: (() => {
         const fromStats = calculateFantasyPoints(p.stats ?? {}, scoring);
         if (fromStats > 0) return fromStats;
@@ -108,17 +124,26 @@ export function normalizeFootballPlayers(rawPlayers, scoringPreset = 'ppr') {
     baselines[pos] = sorted[Math.min(replIdx, sorted.length - 1)] ?? 0;
   }
 
-  // Sort by VBD descending, then ADP as tiebreaker.
-  // This is the key change: a QB projected at 400 pts with replacement QB at 280 (VBD=120)
-  // ranks below an RB projected at 350 pts with replacement RB at 180 (VBD=170).
   const withVBD = withPts.map(p => ({
     ...p,
     _vbd: Math.max(0, p._pts - (baselines[p.position] ?? 0)),
   }));
 
+  // Sort by consensus ADP when available (FantasyPros ECR / ESPN), fall back to VBD.
+  // Pure VBD overvalues dual-threat QBs (Lamar/Allen's rushing pushes raw pts sky-high)
+  // and misses the "wait on QB" wisdom that expert consensus rankings already encode.
+  // FantasyPros ECR adp=14 for Lamar and adp=7 for Allen correctly reflect that dynamic.
+  // Only _trustedAdp (FP ECR + ESPN) is used for sort — not noisy composite/overallRank.
   const sorted = [...withVBD].sort((a, b) => {
+    const aAdp = a._trustedAdp;
+    const bAdp = b._trustedAdp;
+    // Both have consensus ADP — trust it as primary sort (mirrors ESPN Top 300 ordering)
+    if (aAdp != null && bAdp != null) return aAdp - bAdp;
+    if (aAdp != null) return -1;   // a has ADP, b doesn't → a ranks higher
+    if (bAdp != null) return 1;    // b has ADP, a doesn't → b ranks higher
+    // No trusted ADP for either — fall back to VBD (positional scarcity-adjusted value)
     if (b._vbd !== a._vbd) return b._vbd - a._vbd;
-    return (a._effAdp ?? a.adp ?? 999) - (b._effAdp ?? b.adp ?? 999);
+    return 0;
   });
 
   const posCounters = {};
@@ -126,7 +151,7 @@ export function normalizeFootballPlayers(rawPlayers, scoringPreset = 'ppr') {
     const pos = p.position;
     posCounters[pos] = posCounters[pos] ?? 0;
     const posRank = posCounters[pos]++;
-    const { _pts, _vbd, _effAdp, ...raw } = p;
+    const { _pts, _vbd, _effAdp, _trustedAdp, ...raw } = p;
     // Promote effective ADP into raw so the display ADP isn't null for the ~99% of
     // players the backend doesn't populate adp for.
     if (_effAdp != null && (raw.adp == null || raw.adp <= 0)) raw.adp = _effAdp;
