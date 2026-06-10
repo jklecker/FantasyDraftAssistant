@@ -452,7 +452,30 @@ export default function App() {
         || (p.nextGen.compositeRank != null && p.nextGen.compositeRank > 0)
       ))
     );
-    const sourceData = hasRealRankings ? footballPlayers : FOOTBALL_PLAYERS;
+
+    // When using live API data, enrich each player with pff + nextGen analytics
+    // from the mock data (matched by name). The live API has accurate ADP/rankings
+    // but no pre-season projections; mock data has the analytics but no live rankings.
+    // Draft is always pre-season so mock projections are the right source for upside/breakout.
+    const mockByName = new Map(
+      FOOTBALL_PLAYERS.map(p => [p.name.toLowerCase().trim(), p])
+    );
+    const sourceData = hasRealRankings
+      ? footballPlayers.map(p => {
+          const mock = mockByName.get(p.name?.toLowerCase().trim());
+          if (!mock) return p;
+          return {
+            ...p,
+            // Prefer live stats/projections; fall back to mock for analytics not in live API
+            stats: p.stats ?? mock.stats ?? null,
+            pff: (p.pff && Object.keys(p.pff).length > 0) ? p.pff : (mock.pff ?? p.pff),
+            nextGen: {
+              ...(mock.nextGen ?? {}),   // analytics from mock (targetShare, rushShare, etc.)
+              ...(p.nextGen ?? {}),      // live rankings overlay on top (espnAdp, compositeRank, etc.)
+            },
+          };
+        })
+      : FOOTBALL_PLAYERS;
 
     const allNormalized = normalizeFootballPlayers(sourceData, normalizeKey);
     const available = allNormalized.map(p => ({
