@@ -11,16 +11,20 @@
  * Outputs: { bestPick, bestValue, wontMakeItBack, upsidePick, topByPosition }
  */
 
+// Positions that should never appear in skill-position recommendations (bestPick, upsidePick).
+// DST and K are always drafted in the final rounds — surfacing them as "best pick" is misleading.
+const LATE_ROUND_POSITIONS = new Set(['DST', 'K']);
+
 /**
  * Primary sort score: ADP when stats are synthetic, VBD when real projections exist.
- * When stats are null (off-season or API gaps), VBD is computed from ADP-synthetic pts
- * which inflates TEs due to low replacement baselines. Use ADP directly in that case
- * since it already encodes consensus expert opinion across position groups.
+ * DST/K are capped to a low score so they never surface above skill positions in top10.
  */
 function primaryScore(player) {
+  // Hard cap: DST/K should never outrank skill positions in overall recommendations.
+  if (LATE_ROUND_POSITIONS.has(player.position)) return -1;
+
   const hasRealStats = Object.keys(player.projections?.rawStats ?? {}).length > 0;
   if (hasRealStats) {
-    // Real projections — use VBD (positional scarcity-adjusted value)
     return player.vbd ?? player.projections?.fantasyPoints ?? 0;
   }
   // Synthetic/no stats — sort by consensus ADP ascending (invert so higher score = better)
@@ -99,8 +103,9 @@ export function getTopPlayersByPosition(players, position, limit = 5) {
 export function runDraftEngine({ availablePlayers, draftedPlayers = [], currentPick = 1, nextPick = null, positions = [], teamSize = 12 }) {
   const pool = availablePlayers.filter(p => !p.isDrafted);
 
-  // 1. Top 10 available overall — ranked by VBD (positional scarcity-adjusted)
+  // 1. Top 10 available skill positions — DST/K excluded (they go in the final rounds)
   const top10 = [...pool]
+    .filter(p => !LATE_ROUND_POSITIONS.has(p.position))
     .sort((a, b) => primaryScore(b) - primaryScore(a))
     .slice(0, 10);
 
@@ -110,9 +115,10 @@ export function runDraftEngine({ availablePlayers, draftedPlayers = [], currentP
     topByPosition[pos] = getTopPlayersByPosition(pool, pos, 5);
   }
 
-  // 3A. Best Pick — highest VBD (scarcity-adjusted value), not raw projected points.
-  // A QB at 400 pts loses to an RB at 350 if the RB's positional drop-off is steeper.
+  // 3A. Best Pick — highest VBD among skill positions only (QB/RB/WR/TE).
+  // DST and K are always late-round picks; never recommend them as "best pick".
   const bestPick = [...pool]
+    .filter(p => !LATE_ROUND_POSITIONS.has(p.position))
     .sort((a, b) => primaryScore(b) - primaryScore(a))
     .slice(0, 3);
 
@@ -128,16 +134,20 @@ export function runDraftEngine({ availablePlayers, draftedPlayers = [], currentP
     .slice(0, 3)
     .map(({ _valueScore, ...p }) => ({ ...p, valueScore: _valueScore }));
 
-  // 3C. Won't Make It Back — ADP < nextPick (will be gone before you pick again)
+  // 3C. Won't Make It Back — ADP < nextPick (will be gone before you pick again).
+  // Skill positions only — no point warning about DST/K going early (they shouldn't).
   const effectiveNextPick = nextPick ?? currentPick + 1;
   const wontMakeItBack = [...pool]
+    .filter(p => !LATE_ROUND_POSITIONS.has(p.position))
     .filter(p => (p.adp ?? 999) < effectiveNextPick && (p.adp ?? 999) >= currentPick)
     .sort((a, b) => primaryScore(b) - primaryScore(a))
     .slice(0, 5);
 
-  // 3D. Upside Pick — high breakout score
-  const withBreakout = pool.map(p => ({ ...p, _breakout: computeBreakoutScore(p) }));
-  const breakoutThreshold = 5; // only flag meaningful upside
+  // 3D. Upside Pick — high breakout score among skill positions only
+  const withBreakout = pool
+    .filter(p => !LATE_ROUND_POSITIONS.has(p.position))
+    .map(p => ({ ...p, _breakout: computeBreakoutScore(p) }));
+  const breakoutThreshold = 5;
   const upsidePick = withBreakout
     .filter(p => p._breakout > breakoutThreshold)
     .sort((a, b) => b._breakout - a._breakout)
