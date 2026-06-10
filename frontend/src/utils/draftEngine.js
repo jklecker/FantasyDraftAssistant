@@ -29,14 +29,34 @@ function primaryScore(player) {
 }
 
 /**
- * Compute a value score from adp vs overall ranking.
- * Positive = player available later than expected (good value).
+ * Expected overall ADP for a player given their position and positional rank.
+ * Mirrors ESPN Top 300 distribution: RBs scarce early, QBs/Ks wait til late.
+ * These multipliers match the backend MarkdownRankingsService.estimateOverall().
+ */
+function expectedAdp(position, posRank) {
+  switch (position) {
+    case 'RB':  return posRank * 3;         // RB1≈3,  RB5≈15, RB10≈30
+    case 'WR':  return posRank * 3 + 2;     // WR1≈5,  WR5≈17, WR10≈32
+    case 'QB':  return posRank * 8;         // QB1≈8,  QB2≈16  (wait on QB)
+    case 'TE':  return posRank * 9 + 1;     // TE1≈10, TE2≈19
+    case 'K':   return posRank * 2 + 170;   // Ks go very late
+    case 'DST': return posRank * 2 + 160;
+    default:    return posRank * 6;
+  }
+}
+
+/**
+ * Value score = how many picks LATER than positionally expected this player is sitting.
+ * Positive = steal/value — they should have gone earlier based on their position rank.
+ * e.g. WR5 sitting at ADP 35 when WR5s typically go at pick 17 → score = +18
+ * PFF grade bonus rewards players with strong analytics to break ties.
  */
 function computeValueScore(player) {
   const adp = player.adp ?? 999;
-  const overall = player.rankings?.overall ?? 999;
-  const base = adp - overall;
-  const pffBonus = player.pff?.overallGrade ? player.pff.overallGrade * 0.2 : 0;
+  const posRank = player.rankings?.position ?? 999;
+  const expected = expectedAdp(player.position, posRank);
+  const base = adp - expected;
+  const pffBonus = player.pff?.overallGrade ? player.pff.overallGrade * 0.1 : 0;
   return base + pffBonus;
 }
 
@@ -96,15 +116,14 @@ export function runDraftEngine({ availablePlayers, draftedPlayers = [], currentP
     .sort((a, b) => primaryScore(b) - primaryScore(a))
     .slice(0, 3);
 
-  // 3B. Best Value — players available later than their VBD rank suggests,
-  // scoped to within ~2 rounds of the current pick so round-1 picks don't surface
-  // round-10 sleepers as "value" (e.g. Justin Fields at ADP 120 is irrelevant at pick 1).
-  const valueWindow = currentPick + teamSize * 2;
+  // 3B. Best Value — players sitting significantly later in ADP than their positional
+  // tier suggests. A WR5 available at pick 35 when WR5s typically go at pick 17 = +18 value.
+  // Scoped to within ~3 rounds of the current pick so late sleepers don't surface early.
+  const valueWindow = currentPick + teamSize * 3;
   const bestValue = [...pool]
-    .filter(p => (p.vbd ?? 0) > 0)
     .filter(p => (p.adp ?? 999) <= valueWindow)
     .map(p => ({ ...p, _valueScore: computeValueScore(p) }))
-    .filter(p => p._valueScore > 5)
+    .filter(p => p._valueScore > 8)   // at least ~1 round later than expected
     .sort((a, b) => b._valueScore - a._valueScore)
     .slice(0, 3)
     .map(({ _valueScore, ...p }) => ({ ...p, valueScore: _valueScore }));
