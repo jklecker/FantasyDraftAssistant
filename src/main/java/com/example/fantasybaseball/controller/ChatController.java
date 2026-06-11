@@ -24,7 +24,8 @@ import java.util.Map;
 @RequestMapping("/api")
 public class ChatController {
 
-    private static final String GEMINI_MODEL = "gemini-2.0-flash";
+    // flash-lite: 30 RPM free tier (vs 15 for flash) — plenty for draft usage
+    private static final String GEMINI_MODEL = "gemini-2.0-flash-lite";
     private static final String GEMINI_URL =
             "https://generativelanguage.googleapis.com/v1beta/models/"
             + GEMINI_MODEL + ":generateContent";

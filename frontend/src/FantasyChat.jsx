@@ -26,41 +26,48 @@ function playerSummary(p, sport) {
   return `${p.name}(${p.position},${p.team}${age},val=${val},HR=${s.HR ?? s.hr ?? 0},RBI=${s.RBI ?? s.rbi ?? 0},SB=${s.SB ?? s.sb ?? 0})`;
 }
 
-/** Compact player summary — fewer tokens than full playerSummary. */
+/** Ultra-compact player token: Name(POS#ADP,vVAL) — e.g. Bijan(RB#2,v94) */
 function shortSummary(p, sport) {
   const val = playerValue(p, sport).toFixed(0);
   const adp = p.adp ? `#${p.adp}` : '';
   return `${p.name}(${p.position}${adp},v${val})`;
 }
 
-/** Build the system prompt injecting current player context. */
-function buildSystemPrompt(sport, myRoster, availablePlayers) {
-  const rosterStr = (myRoster || []).map(p => shortSummary(p, sport)).join(', ');
-  const topAvail = (availablePlayers || [])
-    .filter(p => !myRoster?.some(r => (r.id ?? r.name) === (p.id ?? p.name)))
-    .slice(0, 10)
-    .map(p => shortSummary(p, sport))
-    .join(', ');
+/**
+ * Build a minimal system prompt — only inject the data the question actually needs.
+ * Telegraphic/compressed style to minimize tokens on the free Gemini tier.
+ */
+function buildSystemPrompt(sport, myRoster, availablePlayers, question) {
+  const q = (question || '').toLowerCase();
 
   const sportCtx = sport === 'football'
-    ? `Scoring: PPR (1 pt/reception). Standard roster: QB/2RB/2WR/TE/FLEX/K/DST. 2026 NFL season. Use VBD and positional scarcity — RBs and WRs age-curve faster, QBs have deeper value.`
-    : `Scoring: 5x5 H2H categories — R/H/HR/RBI/SB (hitting) + W/SV/K/ERA/WHIP (pitching). 12-team snake draft. Positions: C/1B/2B/3B/SS/OF×3/SP×2/RP×2/UTIL. Closer saves and SP strikeouts are scarcer — weight those.`;
+    ? 'PPR.Roster:QB/2RB/2WR/TE/FLEX/K/DST.2026NFL.'
+    : '5x5H2H(R/H/HR/RBI/SB+W/SV/K/ERA/WHIP).12tm.';
 
-  return `You are an elite fantasy ${sport} analyst and drafter for a 12-team H2H league. Give sharp, confident advice like an expert would — no hedging, no filler.
+  const needsRoster = /roster|team|my pick|keeper|trade|drop|how.*look|strength|weakness/.test(q);
+  const needsAvail  = /draft|pick|waiver|add|free agent|available|who should|next pick|round/.test(q);
 
-${sportCtx}
+  const rosterStr = needsRoster
+    ? (myRoster || []).map(p => shortSummary(p, sport)).join(',') || 'empty'
+    : null;
 
-MY CURRENT ROSTER: ${rosterStr || '(empty — draft may not have started yet)'}
+  const topAvail = needsAvail
+    ? (availablePlayers || [])
+        .filter(p => !myRoster?.some(r => (r.id ?? r.name) === (p.id ?? p.name)))
+        .slice(0, 8)
+        .map(p => shortSummary(p, sport))
+        .join(',') || 'none'
+    : null;
 
-TOP AVAILABLE PLAYERS (ranked by projected value): ${topAvail || '(not loaded)'}
+  // Telegraphic instructions — LLMs parse this fine, saves ~30 tokens vs prose
+  const lines = [
+    `fantasy${sport} analyst.${sportCtx}`,
+    `verdict first(Accept/Decline/Draft/Pass).reasons<=3.sentences<=4.bold names.`,
+    rosterStr ? `ROSTER:${rosterStr}` : null,
+    topAvail  ? `AVAIL:${topAvail}` : null,
+  ].filter(Boolean);
 
-Rules for your responses:
-- Always give a clear verdict first: Accept / Decline / Add / Drop / Draft / Pass
-- Back it up with 1-3 specific reasons using the data above (val, age, position scarcity)
-- For draft picks: name a specific player recommendation with why
-- For trades: compare both sides by total value AND positional need
-- Keep it under 6 sentences unless the user asks for more depth
-- Use markdown bold for player names and key verdicts`;
+  return lines.join(' ');
 }
 
 // ─── Rule-based fallback ──────────────────────────────────────────────────────
@@ -223,15 +230,13 @@ function ruleBased(question, sport, myRoster, availablePlayers) {
 
 // ─── Backend proxy call ───────────────────────────────────────────────────────
 // POSTs to /api/chat on the Spring Boot server, which holds the Gemini API key.
-async function callChat(systemPrompt, history, userText) {
+// No conversation history — draft questions are stateless and history was the
+// biggest token drain. Each message is self-contained with fresh context.
+async function callChat(systemPrompt, userText) {
   const contents = [
     { role: 'user',  parts: [{ text: systemPrompt }] },
-    { role: 'model', parts: [{ text: 'Understood. Ready to help.' }] },
-    ...history.slice(1).map(m => ({
-      role: m.role === 'user' ? 'user' : 'model',
-      parts: [{ text: m.content }],
-    })),
-    { role: 'user', parts: [{ text: userText }] },
+    { role: 'model', parts: [{ text: 'Ready.' }] },
+    { role: 'user',  parts: [{ text: userText }] },
   ];
 
   const res = await fetch('/api/chat', {
@@ -239,7 +244,7 @@ async function callChat(systemPrompt, history, userText) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       contents,
-      generationConfig: { maxOutputTokens: 1024, temperature: 0.4, topP: 0.9 },
+      generationConfig: { maxOutputTokens: 512, temperature: 0.4, topP: 0.9 },
     }),
   });
 
@@ -344,8 +349,8 @@ export default function FantasyChat({ sport, myRoster, availablePlayers }) {
       let reply;
       if (aiAvailable) {
         try {
-          const systemPrompt = buildSystemPrompt(sport, effectiveRoster, availablePlayers);
-          reply = await callChat(systemPrompt, messages.slice(-8), q);
+          const systemPrompt = buildSystemPrompt(sport, effectiveRoster, availablePlayers, q);
+          reply = await callChat(systemPrompt, q);
         } catch (e) {
           // Always answer from the local engine instead of surfacing the error.
           const local = ruleBased(q, sport, effectiveRoster, availablePlayers);
