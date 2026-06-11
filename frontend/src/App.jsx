@@ -146,17 +146,7 @@ export default function App() {
     try { return Number(window.localStorage.getItem('footballTeamSize')) || 12; } catch (_) { return 12; }
   });
 
-  // ── Cheat Sheet state (independent draft tracker for ESPN/Yahoo users) ──
-  const [cheatPicks, setCheatPicks] = useState(() => {
-    try {
-      const raw = window.localStorage.getItem('cheatPicks');
-      const parsed = raw ? JSON.parse(raw) : [];
-      return Array.isArray(parsed) ? parsed : [];
-    } catch (_) { return []; }
-  });
-  const [csMyTeam, setCsMyTeam] = useState(() => {
-    try { return Number(window.localStorage.getItem('csMyTeam')) || 1; } catch (_) { return 1; }
-  });
+  // ── Cheat Sheet UI state (picks are stored in footballPicks, shared with main board) ──
   const [csPosFilter, setCsPosFilter] = useState('ALL');
   const [csSearch, setCsSearch] = useState('');
 
@@ -411,12 +401,6 @@ export default function App() {
   useEffect(() => {
     try { window.localStorage.setItem('footballScoringPreset', footballScoringPreset); } catch (_) {}
   }, [footballScoringPreset]);
-  useEffect(() => {
-    try { window.localStorage.setItem('cheatPicks', JSON.stringify(cheatPicks)); } catch (_) {}
-  }, [cheatPicks]);
-  useEffect(() => {
-    try { window.localStorage.setItem('csMyTeam', String(csMyTeam)); } catch (_) {}
-  }, [csMyTeam]);
 
   // Fetch live NFL players when sport switches to football or scoring changes
   useEffect(() => {
@@ -1178,7 +1162,7 @@ export default function App() {
             <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(280px,1fr))',gap:16}}>
               {[
                 {label:'🏆 Best Pick', players: footballEngine.bestPick, subtitle:'Smart pick for your roster — balances best available with what you need + scarcity', extraCol: p => p.adp != null ? `ADP ${p.adp}` : null},
-                {label:'💎 Best Value', players: footballEngine.bestValue, subtitle:'Slipped past their ADP — still here at your pick', extraCol: p => `${(p.valueScore??0).toFixed(0)} picks past ADP`},
+                {label:'� Wheel Value', players: footballEngine.wheelValue, subtitle:'Take now — quality at this position drops after the snake turn', extraCol: p => `${(p.wheelScore??0).toFixed(0)} pt tier gap`},
                 {label:'⏰ Won\'t Make It Back', players: footballEngine.wontMakeItBack, subtitle:'Gone before your next pick'},
                 {label:'🚀 Upside Pick', players: footballEngine.upsidePick, subtitle:'Breakout potential via analytics', extraCol: p => `${(p.breakoutScore??0).toFixed(1)} brk`},
               ].map(({label, players, subtitle, extraCol}) => (
@@ -2129,7 +2113,7 @@ export default function App() {
       {activeTab === 'cheatsheet' && isFootball(sport) && (() => {
         // ── helpers scoped to this render ──────────────────────────────────
         const csTeamCount = footballTeamSize;
-        const csTotalPicks = cheatPicks.length;
+        const csTotalPicks = footballPicks.length;
         const csCurrentPick = csTotalPicks + 1;
         const csCurrentRound = Math.ceil(csCurrentPick / csTeamCount);
         const csPickInRound  = ((csCurrentPick - 1) % csTeamCount) + 1;
@@ -2143,7 +2127,7 @@ export default function App() {
           const r   = Math.ceil(p / csTeamCount);
           const pip = ((p - 1) % csTeamCount) + 1;
           const t   = r % 2 === 0 ? csTeamCount - pip + 1 : pip;
-          if (t === csMyTeam) { csMyNextPick = p; break; }
+          if (t === footballTeamPos) { csMyNextPick = p; break; }
         }
 
         // player pool: use engine if loaded, else normalize mock data
@@ -2154,7 +2138,7 @@ export default function App() {
         // per-team rosters
         const csRosters = {};
         for (let t = 1; t <= csTeamCount; t++) csRosters[t] = [];
-        cheatPicks.forEach(cp => {
+        footballPicks.forEach(cp => {
           const p = csAllPlayers.find(pl => pl.id === cp.playerId);
           if (p) csRosters[cp.teamSlot]?.push(p);
         });
@@ -2172,10 +2156,10 @@ export default function App() {
 
         // pickMap for fast lookup
         const csPickMap = {};
-        cheatPicks.forEach(cp => { csPickMap[cp.playerId] = cp; });
+        footballPicks.forEach(cp => { csPickMap[cp.playerId] = cp; });
 
         // filtered player list
-        const draftedSet = new Set(cheatPicks.map(cp => cp.playerId));
+        const draftedSet = new Set(footballPicks.map(cp => cp.playerId));
         let csFiltered = csAllPlayers;
         if (csPosFilter !== 'ALL') {
           csFiltered = csFiltered.filter(p =>
@@ -2194,8 +2178,8 @@ export default function App() {
 
         const cellStyle = (t) => ({
           padding: '2px 4px', textAlign: 'center',
-          borderLeft:  t === csMyTeam ? '2px solid #bee3f8' : '1px solid #f0f4ff',
-          borderRight: t === csMyTeam ? '2px solid #bee3f8' : '',
+          borderLeft:  t === footballTeamPos ? '2px solid #bee3f8' : '1px solid #f0f4ff',
+          borderRight: t === footballTeamPos ? '2px solid #bee3f8' : '',
         });
 
         return (
@@ -2207,25 +2191,18 @@ export default function App() {
                 <span style={{ color:'#718096', fontSize:'0.82em' }}>Track all picks while drafting on ESPN/Yahoo</span>
               </div>
               <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' }}>
-                <label style={{ fontSize:'0.9em', fontWeight:600 }}>My team slot:</label>
-                <select value={csMyTeam} onChange={e => setCsMyTeam(Number(e.target.value))}
-                  style={{ padding:'3px 8px', borderRadius:6, fontSize:'0.9em' }}>
-                  {Array.from({ length: csTeamCount }, (_, i) => (
-                    <option key={i+1} value={i+1}>Team {i+1}</option>
-                  ))}
-                </select>
                 <span style={{ color:'#718096', fontSize:'0.82em' }}>
-                  ({csTeamCount} teams · {footballScoringPreset.toUpperCase()})
+                  Slot #{footballTeamPos} · {csTeamCount} teams · {footballScoringPreset.toUpperCase()} — change your slot on the Draft Board tab
                 </span>
                 <div style={{ marginLeft:'auto', display:'flex', gap:6 }}>
                   {csTotalPicks > 0 && (
-                    <button onClick={() => setCheatPicks(p => p.slice(0, -1))}
+                    <button onClick={() => setFootballPicks(p => p.slice(0, -1))}
                       style={{ padding:'3px 10px', borderRadius:6, fontSize:'0.82em',
                         background:'#f7fafc', color:'#4a5568', border:'1px solid #e2e8f0', cursor:'pointer' }}>
                       ↩ Undo
                     </button>
                   )}
-                  <button onClick={() => { if (window.confirm('Reset all cheat sheet picks?')) setCheatPicks([]); }}
+                  <button onClick={() => { if (window.confirm('Reset all cheat sheet picks?')) setFootballPicks([]); }}
                     style={{ padding:'3px 10px', borderRadius:6, fontSize:'0.82em',
                       background:'#fff5f5', color:'#c53030', border:'1px solid #fed7d7', cursor:'pointer' }}>
                     🗑 Reset
@@ -2236,18 +2213,18 @@ export default function App() {
               {/* On the clock */}
               <div style={{
                 marginTop:10, padding:'8px 12px', borderRadius:8,
-                background: csOnClock === csMyTeam ? '#f0fff4' : '#ebf8ff',
-                border: `1px solid ${csOnClock === csMyTeam ? '#9ae6b4' : '#bee3f8'}`,
+                background: csOnClock === footballTeamPos ? '#f0fff4' : '#ebf8ff',
+                border: `1px solid ${csOnClock === footballTeamPos ? '#9ae6b4' : '#bee3f8'}`,
                 display:'flex', alignItems:'center', gap:14, flexWrap:'wrap',
               }}>
                 <div>
                   <strong>Round {csCurrentRound} · Pick #{csCurrentPick}</strong>
                   {' — '}
-                  <span style={{ fontWeight:700, color: csOnClock === csMyTeam ? '#276749' : '#2b6cb0', fontSize:'1.05em' }}>
-                    {csOnClock === csMyTeam ? `⭐ YOUR PICK (Team ${csOnClock})` : `Team ${csOnClock} is on the clock`}
+                  <span style={{ fontWeight:700, color: csOnClock === footballTeamPos ? '#276749' : '#2b6cb0', fontSize:'1.05em' }}>
+                    {csOnClock === footballTeamPos ? `⭐ YOUR PICK (Team ${csOnClock})` : `Team ${csOnClock} is on the clock`}
                   </span>
                 </div>
-                {csMyNextPick && csOnClock !== csMyTeam && (
+                {csMyNextPick && csOnClock !== footballTeamPos && (
                   <span style={{ color:'#718096', fontSize:'0.85em' }}>
                     Your next pick: #{csMyNextPick} ({csMyNextPick - csCurrentPick} picks away)
                   </span>
@@ -2268,10 +2245,10 @@ export default function App() {
                         return (
                           <th key={t} style={{
                             padding:'3px 4px', textAlign:'center', minWidth:38,
-                            background: t === csMyTeam ? '#ebf8ff' : t === csOnClock ? '#fffff0' : '',
-                            color: t === csMyTeam ? '#2b6cb0' : '#4a5568',
-                            fontWeight: t === csMyTeam ? 700 : 400,
-                            borderBottom: t === csMyTeam ? '2px solid #3182ce' : '1px solid #e2e8f0',
+                            background: t === footballTeamPos ? '#ebf8ff' : t === csOnClock ? '#fffff0' : '',
+                            color: t === footballTeamPos ? '#2b6cb0' : '#4a5568',
+                            fontWeight: t === footballTeamPos ? 700 : 400,
+                            borderBottom: t === footballTeamPos ? '2px solid #3182ce' : '1px solid #e2e8f0',
                           }}>
                             T{t}{t === csOnClock ? '⏰' : ''}
                           </th>
@@ -2366,12 +2343,12 @@ export default function App() {
                           <td>
                             <div style={{ display:'flex', gap:4 }}>
                               <button
-                                onClick={() => setCheatPicks(prev => [...prev, { playerId: p.id, teamSlot: csOnClock, overall: prev.length + 1 }])}
+                                onClick={() => setFootballPicks(prev => [...prev, { playerId: p.id, teamSlot: csOnClock, overall: prev.length + 1 }])}
                                 title={`Mark as picked by Team ${csOnClock} (on clock)`}
                                 style={{ padding:'2px 8px', borderRadius:4, fontSize:'0.78em', cursor:'pointer',
-                                  background: csOnClock === csMyTeam ? '#c6f6d5' : '#ebf8ff',
-                                  color:      csOnClock === csMyTeam ? '#276749' : '#2b6cb0',
-                                  border: `1px solid ${csOnClock === csMyTeam ? '#9ae6b4' : '#bee3f8'}`,
+                                  background: csOnClock === footballTeamPos ? '#c6f6d5' : '#ebf8ff',
+                                  color:      csOnClock === footballTeamPos ? '#276749' : '#2b6cb0',
+                                  border: `1px solid ${csOnClock === footballTeamPos ? '#9ae6b4' : '#bee3f8'}`,
                                   fontWeight:600 }}>
                                 📌 T{csOnClock}
                               </button>
@@ -2379,14 +2356,14 @@ export default function App() {
                                 onChange={e => {
                                   if (!e.target.value) return;
                                   const t = Number(e.target.value);
-                                  setCheatPicks(prev => [...prev, { playerId: p.id, teamSlot: t, overall: prev.length + 1 }]);
+                                  setFootballPicks(prev => [...prev, { playerId: p.id, teamSlot: t, overall: prev.length + 1 }]);
                                   e.target.value = '';
                                 }}
                                 style={{ padding:'2px 4px', borderRadius:4, fontSize:'0.78em', border:'1px solid #e2e8f0', cursor:'pointer' }}>
                                 <option value="">→ Team…</option>
                                 {Array.from({ length: csTeamCount }, (_, idx) => (
                                   <option key={idx+1} value={idx+1}>
-                                    {idx + 1 === csMyTeam ? `⭐ Me (T${idx+1})` : `Team ${idx+1}`}
+                                    {idx + 1 === footballTeamPos ? `⭐ Me (T${idx+1})` : `Team ${idx+1}`}
                                   </option>
                                 ))}
                               </select>
@@ -2415,10 +2392,10 @@ export default function App() {
                               <td>
                                 <span style={{
                                   fontSize:'0.78em', padding:'2px 8px', borderRadius:4,
-                                  background: pick.teamSlot === csMyTeam ? '#c6f6d5' : '#e2e8f0',
-                                  color:      pick.teamSlot === csMyTeam ? '#276749' : '#4a5568',
+                                  background: pick.teamSlot === footballTeamPos ? '#c6f6d5' : '#e2e8f0',
+                                  color:      pick.teamSlot === footballTeamPos ? '#276749' : '#4a5568',
                                 }}>
-                                  {pick.teamSlot === csMyTeam ? `⭐ Mine` : `Team ${pick.teamSlot}`}
+                                  {pick.teamSlot === footballTeamPos ? `⭐ Mine` : `Team ${pick.teamSlot}`}
                                 </span>
                               </td>
                             </tr>

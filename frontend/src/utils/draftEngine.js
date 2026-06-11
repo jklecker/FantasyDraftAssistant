@@ -41,11 +41,54 @@ function primaryScore(player) {
  * @param {object} player
  * @param {number} currentPick  the overall pick number you are about to make
  */
-function computeValueScore(player, currentPick) {
-  const adp = player.adp ?? 999;
-  // How many picks past their ADP this player has fallen. Positive = available later
-  // than consensus says they should be = value for you right now.
-  return currentPick - adp;
+/**
+ * Wheel-Turn Value score — how much positional quality you LOSE by waiting.
+ *
+ * tierGap = (this player's pts) - (best same-position player whose ADP > nextPick)
+ *
+ * Example: Pick 11, Mahomes available (470pts). Next surviving QB after the turn
+ * has 380pts → tierGap = 90. You need a QB (needed=true) → wheelScore = 90 * 1.5 = 135.
+ * Meanwhile RB8 (280pts) vs RB10 (265pts, survives turn) → tierGap = 15 → score = 22.
+ * Result: take Mahomes, RBs are fine to wait on.
+ *
+ * @param {object} player
+ * @param {Array}  pool           - all available (not drafted) players
+ * @param {number} nextPick       - your next snake pick (null = currentPick+24)
+ * @param {object} positionCounts - { QB:1, RB:2, ... } for my current roster
+ * @param {object} rosterReq      - { QB:1, RB:2, WR:2, TE:1, FLEX:1, ... }
+ * @param {Array}  flexPositions  - ['RB','WR','TE']
+ */
+function computeWheelTurnScore(player, pool, nextPick, positionCounts, rosterReq, flexPositions) {
+  const pos = player.position;
+  const myPts = player.projections?.fantasyPoints ?? 0;
+  const reach = nextPick ?? 999;
+
+  // Best same-position player who will likely survive until my next pick
+  const willSurvive = pool.filter(p =>
+    p.id !== player.id &&
+    p.position === pos &&
+    (p.adp ?? 999) > reach
+  );
+  const bestSurvivorPts = willSurvive.length > 0
+    ? Math.max(...willSurvive.map(p => p.projections?.fantasyPoints ?? 0))
+    : 0;
+
+  const tierGap = Math.max(0, myPts - bestSurvivorPts);
+
+  // Need multiplier: same logic as roster-aware score
+  const have = positionCounts[pos] ?? 0;
+  const startersNeeded = rosterReq[pos] ?? 0;
+  const flexEligible = flexPositions.includes(pos);
+  const flexStartersFilled = flexPositions.reduce((sum, fp) => {
+    const h = positionCounts[fp] ?? 0;
+    const need = rosterReq[fp] ?? 0;
+    return sum + Math.max(0, h - need);
+  }, 0);
+  const flexSlots = rosterReq.FLEX ?? 0;
+  const needsFlex = flexEligible && flexStartersFilled < flexSlots;
+  const needed = have < startersNeeded || needsFlex;
+
+  return tierGap * (needed ? 1.5 : 0.4);
 }
 
 /**
@@ -174,19 +217,19 @@ export function runDraftEngine({ availablePlayers, draftedPlayers = [], myRoster
     .slice(0, 3)
     .map(({ _rosterScore, ...p }) => p);
 
-  // 3B. Best Value — players who have slipped past their consensus ADP and are still
-  // available at your current pick. If you're at pick 12 and a player with ADP 2 is still
-  // on the board, that's +10 value. These are the steals: higher-ranked than where you're
-  // picking, yet undrafted. Require at least a half-round (~6 picks) of slip to filter noise.
-  const minSlip = Math.max(5, Math.floor(teamSize / 2));
-  const bestValue = [...pool]
+  // 3B. Wheel Value — take now vs wait logic. For each available skill player, calculate
+  // how much positional quality you LOSE by passing on them until your next snake pick.
+  // High score = big tier drop after the turn = take this pick. Low = safely wait.
+  // DST/K excluded; must have real projected points to produce a meaningful gap.
+  const minWheelGap = 10; // pts — filter noise; gaps < 10pts aren't meaningful
+  const wheelValue = [...pool]
     .filter(p => !LATE_ROUND_POSITIONS.has(p.position))
-    .filter(p => (p.adp ?? 999) < 999)
-    .map(p => ({ ...p, _valueScore: computeValueScore(p, currentPick) }))
-    .filter(p => p._valueScore >= minSlip)   // slipped at least ~half a round past ADP
-    .sort((a, b) => b._valueScore - a._valueScore)
+    .filter(p => (p.projections?.fantasyPoints ?? 0) > 0)
+    .map(p => ({ ...p, _wheelScore: computeWheelTurnScore(p, pool, nextPick, positionCounts, rosterRequirements, flexPositions) }))
+    .filter(p => p._wheelScore >= minWheelGap)
+    .sort((a, b) => b._wheelScore - a._wheelScore)
     .slice(0, 3)
-    .map(({ _valueScore, ...p }) => ({ ...p, valueScore: _valueScore }));
+    .map(({ _wheelScore, ...p }) => ({ ...p, wheelScore: _wheelScore }));
 
   // 3C. Won't Make It Back — ADP < nextPick (will be gone before you pick again).
   // Skill positions only — no point warning about DST/K going early (they shouldn't).
@@ -208,5 +251,5 @@ export function runDraftEngine({ availablePlayers, draftedPlayers = [], myRoster
     .slice(0, 3)
     .map(({ _breakout, ...p }) => ({ ...p, breakoutScore: _breakout }));
 
-  return { top10, topByPosition, bestPick, bestValue, wontMakeItBack, upsidePick };
+  return { top10, topByPosition, bestPick, wheelValue, wontMakeItBack, upsidePick };
 }
