@@ -9,8 +9,10 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Proxies chat messages to the Google Gemini API.
@@ -24,13 +26,24 @@ import java.util.Map;
 @RequestMapping("/api")
 public class ChatController {
 
-    // flash-lite: 30 RPM free tier (vs 15 for flash) — plenty for draft usage
-    private static final String GEMINI_MODEL = "gemini-2.0-flash-lite";
+    // gemini-2.5-flash: available on free tier (5 RPM / 20 RPD / 250K TPM)
+    // gemini-2.0-flash-lite has 0/0/0 limits on free tier — effectively blocked
+    private static final String GEMINI_MODEL = "gemini-2.5-flash";
     private static final String GEMINI_URL =
             "https://generativelanguage.googleapis.com/v1beta/models/"
             + GEMINI_MODEL + ":generateContent";
 
     private final HttpClient http = HttpClient.newHttpClient();
+
+    // Simple LRU response cache — avoids burning the 20 RPD free-tier limit on
+    // repeated or near-identical questions during a draft. Key = SHA of request body.
+    // Max 50 entries; evicts oldest on overflow.
+    @SuppressWarnings("serial")
+    private final Map<Integer, String> cache = new LinkedHashMap<>(64, 0.75f, true) {
+        @Override protected boolean removeEldestEntry(Map.Entry<Integer, String> e) {
+            return size() > 50;
+        }
+    };
 
     @PostMapping("/chat")
     public ResponseEntity<String> chat(@RequestBody String body) {
@@ -38,6 +51,14 @@ public class ChatController {
         if (apiKey == null || apiKey.isBlank()) {
             return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
                     .body("{\"error\":\"GEMINI_API_KEY not configured on server.\"}");
+        }
+
+        // Cache hit — return saved response, saves an RPD count
+        int cacheKey = body.hashCode();
+        String cached;
+        synchronized (cache) { cached = cache.get(cacheKey); }
+        if (cached != null) {
+            return ResponseEntity.ok(cached);
         }
 
         try {
@@ -55,11 +76,13 @@ public class ChatController {
                 System.err.println("[chat] Gemini 429: " + res.body());
             }
 
-            // Pass 200 and 429 (rate-limit) through as-is. Everything else
-            // (403 Zscaler block, 401 bad key, 5xx, etc.) becomes 503 so
-            // the frontend knows to fall back to rule-based analysis.
-            if (status == 200 || status == 429) {
-                return ResponseEntity.status(status).body(res.body());
+            // Cache successful responses
+            if (status == 200) {
+                synchronized (cache) { cache.put(cacheKey, res.body()); }
+                return ResponseEntity.ok(res.body());
+            }
+            if (status == 429) {
+                return ResponseEntity.status(429).body(res.body());
             }
             return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
                     .body("{\"error\":\"AI service unavailable (upstream " + status + ").\"}");
