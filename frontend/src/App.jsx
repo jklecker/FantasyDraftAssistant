@@ -484,6 +484,24 @@ export default function App() {
       .filter(pk => pk.teamSlot === footballTeamPos)
       .map(pk => pk.playerId);
     const myRoster = available.filter(p => myPlayerIds.includes(p.id));
+
+    // Opponent roster modeling — per-team position counts + the ordered list of opponent
+    // slots picking between now and my next pick. Drives the Wheel Value simulation.
+    const opponentRosters = {};
+    footballPicks.forEach(pk => {
+      const pl = available.find(p => p.id === pk.playerId);
+      if (!pl) return;
+      const slot = pk.teamSlot;
+      opponentRosters[slot] = opponentRosters[slot] ?? {};
+      opponentRosters[slot][pl.position] = (opponentRosters[slot][pl.position] ?? 0) + 1;
+    });
+    const upcomingOpponentSlots = [];
+    if (myNextPick) {
+      for (let pickNum = currentOverallPick + 1; pickNum < myNextPick; pickNum++) {
+        upcomingOpponentSlots.push(calcTeamForPick(pickNum, footballTeamSize));
+      }
+    }
+
     const result = runDraftEngine({
       availablePlayers: available.filter(p => !p.isDrafted),
       draftedPlayers: available.filter(p => p.isDrafted),
@@ -494,6 +512,8 @@ export default function App() {
       teamSize: footballTeamSize,
       rosterRequirements: sportConfig.rosterRequirements ?? {},
       flexPositions: sportConfig.flexPositions ?? [],
+      upcomingOpponentSlots,
+      opponentRosters,
     });
     setFootballEngine({ players: available, ...result });
   }, [sport, footballPlayers, footballScoringPreset, customFootballScoring, footballDraftedIds, footballPicks, sportConfig, footballTeamPos, footballTeamSize]);
