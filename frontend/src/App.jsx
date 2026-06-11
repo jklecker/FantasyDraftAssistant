@@ -121,13 +121,8 @@ export default function App() {
   const [customScoringError, setCustomScoringError] = useState('');
   // Football per-team picks: [{playerId, teamSlot, overall}] in draft order.
   // teamSlot is auto-assigned via snake draft based on `footballTeamSize`.
-  const [footballPicks, setFootballPicks] = useState(() => {
-    try {
-      const raw = window.localStorage.getItem('footballPicks');
-      const parsed = raw ? JSON.parse(raw) : [];
-      return Array.isArray(parsed) ? parsed : [];
-    } catch (_) { return []; }
-  });
+  const [footballPicks, setFootballPicks] = useState([]);
+  const [footballSyncError, setFootballSyncError] = useState('');
   const [footballBoardSearch, setFootballBoardSearch] = useState('');
   const [footballBoardSort, setFootballBoardSort] = useState({ col: 'adp', dir: 'asc' });
   const [footballPosFilter, setFootballPosFilter] = useState('QB');
@@ -344,32 +339,49 @@ export default function App() {
   // Derived from footballPicks — memoized so the engine useEffect only fires when picks actually change.
   const footballDraftedIds = useMemo(() => footballPicks.map(p => p.playerId), [footballPicks]);
 
-  // Add a football pick — auto-assigns it to whichever team is on the clock
-  // based on snake order. Toasts on duplicate player.
-  const addFootballPick = (playerId) => {
-    setFootballPicks(prev => {
-      if (prev.some(p => p.playerId === playerId)) {
-        const name = footballEngine?.players?.find(p => p.id === playerId)?.name ?? 'That player';
-        showToast(`⚠️ ${name} is already drafted — pick someone else.`);
-        return prev;
+  // Add a football pick — sends to the shared backend so all 12 users see it.
+  const addFootballPick = async (playerId) => {
+    if (footballPicks.some(p => p.playerId === playerId)) {
+      const name = footballEngine?.players?.find(p => p.id === playerId)?.name ?? 'That player';
+      showToast(`⚠️ ${name} is already drafted — pick someone else.`);
+      return;
+    }
+    const overall = footballPicks.length + 1;
+    const teamSlot = calcTeamForPick(overall, footballTeamSize);
+    const pick = { playerId, teamSlot, overall };
+    // Optimistic update so UI feels instant
+    setFootballPicks(prev => [...prev, pick]);
+    try {
+      const res = await fetch('/api/football/picks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(pick),
+      });
+      if (res.status === 409) {
+        // Another user picked them first — roll back and re-poll
+        setFootballPicks(prev => prev.filter(p => p.playerId !== playerId));
+        showToast('⚠️ That player was just drafted by someone else.');
       }
-      const overall = prev.length + 1;
-      const teamSlot = calcTeamForPick(overall, footballTeamSize);
-      return [...prev, { playerId, teamSlot, overall }];
-    });
+    } catch (_) {
+      setFootballSyncError('Pick saved locally — sync failed. Will retry.');
+    }
   };
 
-  // Remove a football pick. Reassigns teamSlot for picks that came after,
-  // since snake order shifts when a pick is undone.
-  const removeFootballPick = (playerId) => {
-    setFootballPicks(prev => {
-      const filtered = prev.filter(p => p.playerId !== playerId);
-      return filtered.map((p, i) => ({
-        ...p,
-        overall: i + 1,
-        teamSlot: calcTeamForPick(i + 1, footballTeamSize),
-      }));
-    });
+  // Remove a football pick. Sends full re-numbered list to backend.
+  const removeFootballPick = async (playerId) => {
+    const filtered = footballPicks
+      .filter(p => p.playerId !== playerId)
+      .map((p, i) => ({ ...p, overall: i + 1, teamSlot: calcTeamForPick(i + 1, footballTeamSize) }));
+    setFootballPicks(filtered);
+    try {
+      await fetch('/api/football/picks', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(filtered),
+      });
+    } catch (_) {
+      setFootballSyncError('Undo saved locally — sync failed. Will retry.');
+    }
   };
 
   // Persist sport selection
@@ -377,17 +389,44 @@ export default function App() {
     try { window.localStorage.setItem('sport', sport); } catch (_) {}
   }, [sport]);
 
-  // Persist football picks
+  // Poll the shared draft board every 4 seconds so all 12 users stay in sync.
+  // Skip the update if pick count + last playerId are unchanged to avoid churn.
+  const lastPickSig = useRef('');
   useEffect(() => {
-    try { window.localStorage.setItem('footballPicks', JSON.stringify(footballPicks)); } catch (_) {}
-  }, [footballPicks]);
+    const poll = async () => {
+      try {
+        const res = await fetch('/api/football/picks');
+        if (!res.ok) return;
+        const data = await res.json();
+        const sig = `${data.length}:${data[data.length - 1]?.playerId ?? 0}`;
+        if (sig !== lastPickSig.current) {
+          lastPickSig.current = sig;
+          setFootballPicks(data);
+          setFootballSyncError('');
+        }
+      } catch (_) {
+        setFootballSyncError('Draft sync offline — picks saved locally.');
+      }
+    };
+    poll(); // immediate fetch on mount
+    const id = setInterval(poll, 4000);
+    return () => clearInterval(id);
+  }, []);
 
-  // Reassign snake slots whenever team size changes
+  // Reassign snake slots whenever team size changes and push to backend.
   useEffect(() => {
-    setFootballPicks(prev => prev.map((p, i) => ({
+    if (footballPicks.length === 0) return;
+    const reslotted = footballPicks.map((p, i) => ({
       ...p,
+      overall: i + 1,
       teamSlot: calcTeamForPick(i + 1, footballTeamSize),
-    })));
+    }));
+    setFootballPicks(reslotted);
+    fetch('/api/football/picks', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(reslotted),
+    }).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [footballTeamSize]);
 
@@ -802,12 +841,13 @@ export default function App() {
             value={sport}
             onChange={e => {
               const newSport = e.target.value;
-              setSport(newSport);
+                          setSport(newSport);
               setActiveTab('draft');
               setDraftState(null);
               setFootballPicks([]);
               setFootballEngine(null);
               setFootballPlayers(null);
+              fetch('/api/football/picks').then(r => r.json()).then(setFootballPicks).catch(() => {});
               if (newSport !== 'football') {
                 loadState();
                 loadCurrentTeam();
@@ -832,7 +872,7 @@ export default function App() {
               if (isFootball(sport)) {
                 setFootballPicks([]);
                 setFootballEngine(null);
-                try { window.localStorage.removeItem('footballPicks'); } catch (_) {}
+                fetch('/api/football/picks', { method: 'DELETE' }).catch(() => {});
                 showToast('🆕 New football draft started!');
               } else {
                 try {
@@ -950,7 +990,7 @@ export default function App() {
                 if (isFootball(sport)) {
                   setFootballPicks([]);
                   setFootballEngine(null);
-                  try { window.localStorage.removeItem('footballPicks'); } catch (_) {}
+                  fetch('/api/football/picks', { method: 'DELETE' }).catch(() => {});
                   showToast('🆕 New football draft started!');
                 } else {
                   try {
@@ -1066,6 +1106,13 @@ export default function App() {
               </div>
             );
           })()}
+
+          {/* Sync status — shows if backend draft sync is offline */}
+          {footballSyncError && (
+            <div style={{padding:'5px 12px',background:'#fffbeb',border:'1px solid #f6e05e',borderRadius:6,marginBottom:8,fontSize:'0.83em',color:'#744210'}}>
+              ⚠️ {footballSyncError}
+            </div>
+          )}
 
           {/* Search bar */}
           <div style={{marginBottom:12}}>

@@ -355,10 +355,18 @@ export default function FantasyChat({ sport, myRoster, availablePlayers }) {
           // Always answer from the local engine instead of surfacing the error.
           const local = ruleBased(q, sport, effectiveRoster, availablePlayers);
           if (e.message.startsWith('rate-limit:')) {
-            // Log quota details visible in browser DevTools → Console
-            console.warn('[chat] rate-limit detail:', e.message.slice(11) || '(no detail)');
+            const detail = e.message.slice(11).trim();
+            // Parse which quota: look for RPM/RPD/TPM in the Gemini error message
+            let quotaLabel = 'AI quota hit';
+            if (/per.*minute|RATE_LIMIT_EXCEEDED|rateLimitExceeded|rpm/i.test(detail)) {
+              quotaLabel = '⏱ Per-minute limit hit (30 req/min) — try again in ~60s';
+            } else if (/per.*day|daily|rpd/i.test(detail)) {
+              quotaLabel = '📅 Daily limit hit (1,500 req/day) — resets midnight Pacific';
+            } else if (/token|tpm/i.test(detail)) {
+              quotaLabel = '📝 Token limit hit — try a shorter question';
+            }
             // Transient — keep AI enabled so the next message retries the model.
-            reply = `_⏳ AI quota hit — here's my read from your draft data:_\n\n${local}\n\n_Check browser console (F12 → Console) for the quota type._`;
+            reply = `_⏳ ${quotaLabel}. Here's my read from your draft data:_\n\n${local}`;
           } else {
             // Hard failure (not configured / server error) — stop hitting the API.
             setAiAvailable(false);
