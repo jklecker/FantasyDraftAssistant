@@ -115,11 +115,14 @@ export function runDraftEngine({ availablePlayers, draftedPlayers = [], currentP
     topByPosition[pos] = getTopPlayersByPosition(pool, pos, 5);
   }
 
-  // 3A. Best Pick — highest VBD among skill positions only (QB/RB/WR/TE).
-  // DST and K are always late-round picks; never recommend them as "best pick".
+  // 3A. Best Pick — best available skill-position players at the current pick.
+  // Sorted by consensus ADP ascending: the player who should have already been
+  // taken (lowest ADP) is the most valuable one still on the board right now.
+  // This directly answers "who should I take with this pick?" regardless of round.
   const bestPick = [...pool]
     .filter(p => !LATE_ROUND_POSITIONS.has(p.position))
-    .sort((a, b) => primaryScore(b) - primaryScore(a))
+    .filter(p => (p.adp ?? 999) < 999)   // must have a consensus rank
+    .sort((a, b) => (a.adp ?? 999) - (b.adp ?? 999))
     .slice(0, 3);
 
   // 3B. Best Value — players sitting significantly later in ADP than their positional

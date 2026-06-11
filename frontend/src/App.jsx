@@ -1169,7 +1169,7 @@ export default function App() {
             <h3>Recommendations</h3>
             <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(280px,1fr))',gap:16}}>
               {[
-                {label:'🏆 Best Pick', players: footballEngine.bestPick, subtitle:'Highest VBD — value over replacement player', extraCol: p => p.vbd != null ? `VBD ${p.vbd.toFixed(0)}` : null},
+                {label:'🏆 Best Pick', players: footballEngine.bestPick, subtitle:'Best available by consensus ADP — take the highest-ranked player still on the board', extraCol: p => p.adp != null ? `ADP ${p.adp}` : null},
                 {label:'💎 Best Value', players: footballEngine.bestValue, subtitle:'Going later than positional tier expects', extraCol: p => `+${(p.valueScore??0).toFixed(1)} picks late`},
                 {label:'⏰ Won\'t Make It Back', players: footballEngine.wontMakeItBack, subtitle:'Gone before your next pick'},
                 {label:'🚀 Upside Pick', players: footballEngine.upsidePick, subtitle:'Breakout potential via analytics', extraCol: p => `${(p.breakoutScore??0).toFixed(1)} brk`},
