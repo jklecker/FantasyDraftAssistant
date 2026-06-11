@@ -33,35 +33,19 @@ function primaryScore(player) {
 }
 
 /**
- * Expected overall ADP for a player given their position and positional rank.
- * Mirrors ESPN Top 300 distribution: RBs scarce early, QBs/Ks wait til late.
- * These multipliers match the backend MarkdownRankingsService.estimateOverall().
+ * Value score = how far a player has slipped past their consensus ADP relative to the
+ * current pick. If you're at pick 12 and Bijan (ADP 2) is still on the board, he has
+ * slipped 10 spots → score = +10. This is true draft-day value: a player ranked higher
+ * than where you're picking who is somehow still available.
+ *
+ * @param {object} player
+ * @param {number} currentPick  the overall pick number you are about to make
  */
-function expectedAdp(position, posRank) {
-  switch (position) {
-    case 'RB':  return posRank * 3;         // RB1≈3,  RB5≈15, RB10≈30
-    case 'WR':  return posRank * 3 + 2;     // WR1≈5,  WR5≈17, WR10≈32
-    case 'QB':  return posRank * 8;         // QB1≈8,  QB2≈16  (wait on QB)
-    case 'TE':  return posRank * 9 + 1;     // TE1≈10, TE2≈19
-    case 'K':   return posRank * 2 + 170;   // Ks go very late
-    case 'DST': return posRank * 2 + 160;
-    default:    return posRank * 6;
-  }
-}
-
-/**
- * Value score = how many picks LATER than positionally expected this player is sitting.
- * Positive = steal/value — they should have gone earlier based on their position rank.
- * e.g. WR5 sitting at ADP 35 when WR5s typically go at pick 17 → score = +18
- * PFF grade bonus rewards players with strong analytics to break ties.
- */
-function computeValueScore(player) {
+function computeValueScore(player, currentPick) {
   const adp = player.adp ?? 999;
-  const posRank = player.rankings?.position ?? 999;
-  const expected = expectedAdp(player.position, posRank);
-  const base = adp - expected;
-  const pffBonus = player.pff?.overallGrade ? player.pff.overallGrade * 0.1 : 0;
-  return base + pffBonus;
+  // How many picks past their ADP this player has fallen. Positive = available later
+  // than consensus says they should be = value for you right now.
+  return currentPick - adp;
 }
 
 /**
@@ -98,9 +82,62 @@ export function getTopPlayersByPosition(players, position, limit = 5) {
 }
 
 /**
+ * Roster-aware Best Pick score. Core principle: take the best available player (by ADP)
+ * AT A POSITION YOU STILL NEED. As your roster fills, positions you've stocked get pushed
+ * down so you stop hoarding (3 RBs → stop drafting RBs, pivot to WR/QB/TE). A bounded
+ * scarcity bonus lets a needed position jump a few ADP slots when its quality players are
+ * about to dry up before your next pick (the "grab the last good QB" pivot).
+ *
+ * @param {object} player
+ * @param {object} ctx  { positionCounts, rosterReq, flexPositions, poolByPos, nextPick }
+ */
+function computeRosterAwareScore(player, ctx) {
+  const { positionCounts, rosterReq, flexPositions, poolByPos, nextPick } = ctx;
+  const pos = player.position;
+  const adp = player.adp ?? 999;
+
+  // Base value: best-available signal. ADP 1 ≈ 299, ADP 300 ≈ 1. Dominant term.
+  const base = Math.max(1, 300 - adp);
+
+  const have = positionCounts[pos] ?? 0;
+  const startersNeeded = rosterReq[pos] ?? 0;
+  const flexEligible = flexPositions.includes(pos);
+
+  // Flex slots are shared among flex-eligible positions. Count flex-eligible players
+  // I hold beyond their dedicated starter requirements.
+  const flexStartersFilled = flexPositions.reduce((sum, fp) => {
+    const h = positionCounts[fp] ?? 0;
+    const need = rosterReq[fp] ?? 0;
+    return sum + Math.max(0, h - need);
+  }, 0);
+  const flexSlots = rosterReq.FLEX ?? 0;
+  const needsFlex = flexEligible && flexStartersFilled < flexSlots;
+
+  // A position is "needed" if I lack a dedicated starter or can still fill a flex slot.
+  const needed = have < startersNeeded || needsFlex;
+
+  // Saturated positions are pushed well below every needed player so they stop being
+  // recommended once you've stocked them (prevents hoarding 4+ RBs).
+  let score = needed ? base : base * 0.3;
+
+  // Bounded scarcity tiebreak — only for needed positions whose quality players are about
+  // to disappear before your next pick. Kept small (max +8) so it can only break ties
+  // between similar-ADP players or nudge you toward the last startable QB/TE when the
+  // choice is close; it can NEVER leap a big ADP gap (a TE18 won't jump a RB2).
+  if (needed) {
+    const reach = nextPick ?? adp + 12;
+    const remaining = (poolByPos[pos] ?? []).filter(p => (p.adp ?? 999) <= reach).length;
+    if (remaining <= 2) score += 8;
+    else if (remaining <= 4) score += 3;
+  }
+
+  return score;
+}
+
+/**
  * Main draft engine.
  */
-export function runDraftEngine({ availablePlayers, draftedPlayers = [], currentPick = 1, nextPick = null, positions = [], teamSize = 12 }) {
+export function runDraftEngine({ availablePlayers, draftedPlayers = [], myRoster = [], currentPick = 1, nextPick = null, positions = [], teamSize = 12, rosterRequirements = {}, flexPositions = [] }) {
   const pool = availablePlayers.filter(p => !p.isDrafted);
 
   // 1. Top 10 available skill positions — DST/K excluded (they go in the final rounds)
@@ -115,24 +152,38 @@ export function runDraftEngine({ availablePlayers, draftedPlayers = [], currentP
     topByPosition[pos] = getTopPlayersByPosition(pool, pos, 5);
   }
 
-  // 3A. Best Pick — best available skill-position players at the current pick.
-  // Sorted by consensus ADP ascending: the player who should have already been
-  // taken (lowest ADP) is the most valuable one still on the board right now.
-  // This directly answers "who should I take with this pick?" regardless of round.
+  // 3A. Best Pick — roster-aware best available. Starts from consensus ADP, then weights
+  // by what YOUR roster still needs and positional scarcity. Early on (empty roster) this
+  // is just best-player-available; as you fill positions it pivots intelligently — e.g.
+  // 3 RBs and no QB will surface a QB over a 4th RB of similar rank.
+  const positionCounts = {};
+  for (const p of myRoster) {
+    positionCounts[p.position] = (positionCounts[p.position] ?? 0) + 1;
+  }
+  const poolByPos = {};
+  for (const p of pool) {
+    if (LATE_ROUND_POSITIONS.has(p.position)) continue;
+    (poolByPos[p.position] = poolByPos[p.position] ?? []).push(p);
+  }
+  const bestPickCtx = { positionCounts, rosterReq: rosterRequirements, flexPositions, poolByPos, nextPick };
   const bestPick = [...pool]
     .filter(p => !LATE_ROUND_POSITIONS.has(p.position))
     .filter(p => (p.adp ?? 999) < 999)   // must have a consensus rank
-    .sort((a, b) => (a.adp ?? 999) - (b.adp ?? 999))
-    .slice(0, 3);
+    .map(p => ({ ...p, _rosterScore: computeRosterAwareScore(p, bestPickCtx) }))
+    .sort((a, b) => b._rosterScore - a._rosterScore)
+    .slice(0, 3)
+    .map(({ _rosterScore, ...p }) => p);
 
-  // 3B. Best Value — players sitting significantly later in ADP than their positional
-  // tier suggests. A WR5 available at pick 35 when WR5s typically go at pick 17 = +18 value.
-  // Scoped to within ~3 rounds of the current pick so late sleepers don't surface early.
-  const valueWindow = currentPick + teamSize * 3;
+  // 3B. Best Value — players who have slipped past their consensus ADP and are still
+  // available at your current pick. If you're at pick 12 and a player with ADP 2 is still
+  // on the board, that's +10 value. These are the steals: higher-ranked than where you're
+  // picking, yet undrafted. Require at least a half-round (~6 picks) of slip to filter noise.
+  const minSlip = Math.max(5, Math.floor(teamSize / 2));
   const bestValue = [...pool]
-    .filter(p => (p.adp ?? 999) <= valueWindow)
-    .map(p => ({ ...p, _valueScore: computeValueScore(p) }))
-    .filter(p => p._valueScore > 8)   // at least ~1 round later than expected
+    .filter(p => !LATE_ROUND_POSITIONS.has(p.position))
+    .filter(p => (p.adp ?? 999) < 999)
+    .map(p => ({ ...p, _valueScore: computeValueScore(p, currentPick) }))
+    .filter(p => p._valueScore >= minSlip)   // slipped at least ~half a round past ADP
     .sort((a, b) => b._valueScore - a._valueScore)
     .slice(0, 3)
     .map(({ _valueScore, ...p }) => ({ ...p, valueScore: _valueScore }));

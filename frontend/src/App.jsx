@@ -495,16 +495,24 @@ export default function App() {
     }));
     const currentOverallPick = footballDraftedIds.length + 1;
     const myNextPick = calcNextSnakePick(currentOverallPick + 1, footballTeamPos, footballTeamSize);
+    // My current roster — used to make Best Pick roster-aware (need + scarcity).
+    const myPlayerIds = footballPicks
+      .filter(pk => pk.teamSlot === footballTeamPos)
+      .map(pk => pk.playerId);
+    const myRoster = available.filter(p => myPlayerIds.includes(p.id));
     const result = runDraftEngine({
       availablePlayers: available.filter(p => !p.isDrafted),
       draftedPlayers: available.filter(p => p.isDrafted),
+      myRoster,
       currentPick: currentOverallPick,
       nextPick: myNextPick,
       positions: sportConfig.positions,
       teamSize: footballTeamSize,
+      rosterRequirements: sportConfig.rosterRequirements ?? {},
+      flexPositions: sportConfig.flexPositions ?? [],
     });
     setFootballEngine({ players: available, ...result });
-  }, [sport, footballPlayers, footballScoringPreset, customFootballScoring, footballDraftedIds, sportConfig, footballTeamPos, footballTeamSize]);
+  }, [sport, footballPlayers, footballScoringPreset, customFootballScoring, footballDraftedIds, footballPicks, sportConfig, footballTeamPos, footballTeamSize]);
 
   useEffect(() => { loadState(); loadCurrentTeam(); loadScoringPresets(); loadActiveScoringPreset(); }, [loadState, loadCurrentTeam, loadScoringPresets, loadActiveScoringPreset]);
 
@@ -1169,8 +1177,8 @@ export default function App() {
             <h3>Recommendations</h3>
             <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(280px,1fr))',gap:16}}>
               {[
-                {label:'🏆 Best Pick', players: footballEngine.bestPick, subtitle:'Best available by consensus ADP — take the highest-ranked player still on the board', extraCol: p => p.adp != null ? `ADP ${p.adp}` : null},
-                {label:'💎 Best Value', players: footballEngine.bestValue, subtitle:'Going later than positional tier expects', extraCol: p => `+${(p.valueScore??0).toFixed(1)} picks late`},
+                {label:'🏆 Best Pick', players: footballEngine.bestPick, subtitle:'Smart pick for your roster — balances best available with what you need + scarcity', extraCol: p => p.adp != null ? `ADP ${p.adp}` : null},
+                {label:'💎 Best Value', players: footballEngine.bestValue, subtitle:'Slipped past their ADP — still here at your pick', extraCol: p => `${(p.valueScore??0).toFixed(0)} picks past ADP`},
                 {label:'⏰ Won\'t Make It Back', players: footballEngine.wontMakeItBack, subtitle:'Gone before your next pick'},
                 {label:'🚀 Upside Pick', players: footballEngine.upsidePick, subtitle:'Breakout potential via analytics', extraCol: p => `${(p.breakoutScore??0).toFixed(1)} brk`},
               ].map(({label, players, subtitle, extraCol}) => (
