@@ -26,13 +26,20 @@ function playerSummary(p, sport) {
   return `${p.name}(${p.position},${p.team}${age},val=${val},HR=${s.HR ?? s.hr ?? 0},RBI=${s.RBI ?? s.rbi ?? 0},SB=${s.SB ?? s.sb ?? 0})`;
 }
 
+/** Compact player summary — fewer tokens than full playerSummary. */
+function shortSummary(p, sport) {
+  const val = playerValue(p, sport).toFixed(0);
+  const adp = p.adp ? `#${p.adp}` : '';
+  return `${p.name}(${p.position}${adp},v${val})`;
+}
+
 /** Build the system prompt injecting current player context. */
 function buildSystemPrompt(sport, myRoster, availablePlayers) {
-  const rosterStr = (myRoster || []).map(p => playerSummary(p, sport)).join(', ');
+  const rosterStr = (myRoster || []).map(p => shortSummary(p, sport)).join(', ');
   const topAvail = (availablePlayers || [])
     .filter(p => !myRoster?.some(r => (r.id ?? r.name) === (p.id ?? p.name)))
-    .slice(0, 20)
-    .map(p => playerSummary(p, sport))
+    .slice(0, 10)
+    .map(p => shortSummary(p, sport))
     .join(', ');
 
   const sportCtx = sport === 'football'
@@ -238,9 +245,14 @@ async function callChat(systemPrompt, history, userText) {
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    const msg = err?.error?.message || err?.error || `Server error ${res.status}`;
     if (res.status === 503) throw new Error('AI not configured on server yet.');
-    if (res.status === 429) throw new Error('Rate limit hit — try again in a moment.');
+    if (res.status === 429) {
+      // Gemini tells us which quota was hit — surface it so we can diagnose
+      const detail = err?.error?.message || err?.quotaExceeded || '';
+      console.warn('[chat] 429 from Gemini:', detail || err);
+      throw new Error('rate-limit:' + detail);
+    }
+    const msg = err?.error?.message || err?.error || `Server error ${res.status}`;
     throw new Error(msg);
   }
 
@@ -337,9 +349,11 @@ export default function FantasyChat({ sport, myRoster, availablePlayers }) {
         } catch (e) {
           // Always answer from the local engine instead of surfacing the error.
           const local = ruleBased(q, sport, effectiveRoster, availablePlayers);
-          if (e.message.includes('Rate limit')) {
+          if (e.message.startsWith('rate-limit:')) {
+            // Log quota details visible in browser DevTools → Console
+            console.warn('[chat] rate-limit detail:', e.message.slice(11) || '(no detail)');
             // Transient — keep AI enabled so the next message retries the model.
-            reply = `_⏳ AI is rate-limited right now — here's my read from the draft data we already have:_\n\n${local}`;
+            reply = `_⏳ AI quota hit — here's my read from your draft data:_\n\n${local}\n\n_Check browser console (F12 → Console) for the quota type._`;
           } else {
             // Hard failure (not configured / server error) — stop hitting the API.
             setAiAvailable(false);

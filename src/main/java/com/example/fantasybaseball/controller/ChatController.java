@@ -46,16 +46,12 @@ public class ChatController {
                     .POST(HttpRequest.BodyPublishers.ofString(body))
                     .build();
 
-            // Retry transient rate-limits (429) a couple times with backoff so a
-            // brief burst doesn't bubble up to the user. 350ms → 900ms.
-            HttpResponse<String> res = null;
-            int status = 0;
-            long[] backoffMs = { 350L, 900L };
-            for (int attempt = 0; attempt <= backoffMs.length; attempt++) {
-                res = http.send(req, HttpResponse.BodyHandlers.ofString());
-                status = res.statusCode();
-                if (status != 429 || attempt == backoffMs.length) break;
-                Thread.sleep(backoffMs[attempt]);
+            HttpResponse<String> res = http.send(req, HttpResponse.BodyHandlers.ofString());
+            int status = res.statusCode();
+
+            // Log 429 body so it shows in Render logs — tells us which quota was hit
+            if (status == 429) {
+                System.err.println("[chat] Gemini 429: " + res.body());
             }
 
             // Pass 200 and 429 (rate-limit) through as-is. Everything else
