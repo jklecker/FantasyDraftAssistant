@@ -46,11 +46,21 @@ public class ChatController {
                     .POST(HttpRequest.BodyPublishers.ofString(body))
                     .build();
 
-            HttpResponse<String> res = http.send(req, HttpResponse.BodyHandlers.ofString());
+            // Retry transient rate-limits (429) a couple times with backoff so a
+            // brief burst doesn't bubble up to the user. 350ms → 900ms.
+            HttpResponse<String> res = null;
+            int status = 0;
+            long[] backoffMs = { 350L, 900L };
+            for (int attempt = 0; attempt <= backoffMs.length; attempt++) {
+                res = http.send(req, HttpResponse.BodyHandlers.ofString());
+                status = res.statusCode();
+                if (status != 429 || attempt == backoffMs.length) break;
+                Thread.sleep(backoffMs[attempt]);
+            }
+
             // Pass 200 and 429 (rate-limit) through as-is. Everything else
             // (403 Zscaler block, 401 bad key, 5xx, etc.) becomes 503 so
             // the frontend knows to fall back to rule-based analysis.
-            int status = res.statusCode();
             if (status == 200 || status == 429) {
                 return ResponseEntity.status(status).body(res.body());
             }

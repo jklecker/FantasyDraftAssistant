@@ -335,12 +335,15 @@ export default function FantasyChat({ sport, myRoster, availablePlayers }) {
           const systemPrompt = buildSystemPrompt(sport, effectiveRoster, availablePlayers);
           reply = await callChat(systemPrompt, messages.slice(-8), q);
         } catch (e) {
-          // Fall back to rule-based on any error except rate-limit
-          if (!e.message.includes('Rate limit')) {
-            setAiAvailable(false);
-            reply = ruleBased(q, sport, effectiveRoster, availablePlayers);
+          // Always answer from the local engine instead of surfacing the error.
+          const local = ruleBased(q, sport, effectiveRoster, availablePlayers);
+          if (e.message.includes('Rate limit')) {
+            // Transient — keep AI enabled so the next message retries the model.
+            reply = `_⏳ AI is rate-limited right now — here's my read from the draft data we already have:_\n\n${local}`;
           } else {
-            throw e;
+            // Hard failure (not configured / server error) — stop hitting the API.
+            setAiAvailable(false);
+            reply = local;
           }
         }
       } else {
