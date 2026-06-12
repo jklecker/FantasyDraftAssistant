@@ -490,7 +490,7 @@ export default function App() {
           return {
             ...p,
             // Prefer live stats/projections; fall back to mock for analytics not in live API
-            stats: p.stats ?? mock.stats ?? null,
+            stats: (p.stats && Object.keys(p.stats).length > 0) ? p.stats : (mock.stats ?? p.stats),
             pff: (p.pff && Object.keys(p.pff).length > 0) ? p.pff : (mock.pff ?? p.pff),
             nextGen: {
               ...(mock.nextGen ?? {}),   // analytics from mock (targetShare, rushShare, etc.)
