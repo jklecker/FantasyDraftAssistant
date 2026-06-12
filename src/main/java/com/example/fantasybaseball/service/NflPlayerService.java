@@ -97,9 +97,14 @@ public class NflPlayerService {
 
             SleeperPlayer p    = new SleeperPlayer();
             p.sleeperId        = str(m, "player_id");
-            p.fullName         = str(m, "full_name");
             p.firstName        = str(m, "first_name");
             p.lastName         = str(m, "last_name");
+            // DEF entries have empty full_name — synthesize from first + last (e.g. "Houston Texans")
+            String fn = str(m, "full_name");
+            if (fn == null || fn.isBlank()) {
+                fn = ((p.firstName != null ? p.firstName : "") + " " + (p.lastName != null ? p.lastName : "")).trim();
+            }
+            p.fullName         = fn.isBlank() ? null : fn;
             p.team             = str(m, "team");
             p.position         = pos;
             p.age              = intVal(m, "age");

@@ -125,8 +125,10 @@ export default function App() {
   const [footballSyncError, setFootballSyncError] = useState('');
   const [footballBoardSearch, setFootballBoardSearch] = useState('');
   const [footballBoardSort, setFootballBoardSort] = useState({ col: 'adp', dir: 'asc' });
-  const [footballPosFilter, setFootballPosFilter] = useState('QB');
+  const [footballPosFilter, setFootballPosFilter] = useState('ALL');
   const [draftedChipsExpanded, setDraftedChipsExpanded] = useState(false);
+  const [draftedSubTab, setDraftedSubTab] = useState('order');
+  const [rosterViewTeam, setRosterViewTeam] = useState(1);
   const [baseballBoardSearch, setBaseballBoardSearch] = useState('');
   const [baseballBoardPos, setBaseballBoardPos] = useState('ALL');
   const [baseballTopPos, setBaseballTopPos] = useState('C');
@@ -914,11 +916,10 @@ export default function App() {
           { id: 'draft',      label: '📋 Draft Board' },
           { id: 'recs',      label: '🎯 My Picks' },
           ...(isFootball(sport) ? [{ id: 'cheatsheet', label: '🗒️ Cheat Sheet' }] : []),
-          { id: 'keepers',   label: '🔒 Keepers (optional)' },
           { id: 'drafted',   label: '📜 Drafted' },
           { id: 'trade',     label: '🔄 Trade Analyzer' },
           { id: 'chat',      label: '💬 Assistant' },
-          { id: 'settings',  label: '⚙️ Scoring/Settings' },
+          { id: 'settings',  label: '⚙️ Settings' },
         ].map(({ id, label }) => (
           <button
             key={id}
@@ -1139,15 +1140,18 @@ export default function App() {
             })();
 
             const sorted = [...available].sort(sortFn);
+            const posFiltered = footballPosFilter === 'ALL'
+              ? sorted
+              : sorted.filter(p => p.position === footballPosFilter);
             const searchResults = q
-              ? sorted.filter(p =>
+              ? posFiltered.filter(p =>
                   p.name.toLowerCase().includes(q) ||
                   p.position.toLowerCase().includes(q) ||
                   p.team.toLowerCase().includes(q)
-                ).slice(0, 20)
+                )
               : null;
-            const rows = searchResults ?? sorted.slice(0, 10);
-            const title = searchResults ? `Search Results (${rows.length})` : '🏈 Top 10 Available';
+            const rows = searchResults ?? posFiltered;
+            const title = searchResults ? `Search Results (${rows.length})` : `Available (${rows.length})`;
 
             const sortHeader = (col, label, title) => {
               const active = footballBoardSort.col === col;
@@ -1166,10 +1170,20 @@ export default function App() {
 
             return (
               <section className="card">
-                <h3>{title}</h3>
-                <div className="data-table-wrapper">
+                <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:8,flexWrap:'wrap'}}>
+                  <h3 style={{margin:0}}>{title}</h3>
+                  <select
+                    value={footballPosFilter}
+                    onChange={e => setFootballPosFilter(e.target.value)}
+                    style={{padding:'4px 10px',borderRadius:6,border:'1px solid #cbd5e0',fontSize:'0.9em'}}
+                  >
+                    <option value="ALL">All</option>
+                    {sportConfig.positions.map(pos => <option key={pos} value={pos}>{pos}</option>)}
+                  </select>
+                </div>
+                <div className="data-table-wrapper" style={{maxHeight:'580px',overflowY:'auto'}}>
                   <table className="data-table">
-                    <thead><tr>
+                    <thead style={{position:'sticky',top:0,background:'#fff',zIndex:1}}><tr>
                       <th>#</th><th>Player</th><th>Pos</th><th>Pos Rank</th><th>Team</th>
                       {sortHeader('vbd', 'VBD', 'Value Over Replacement — positional scarcity-adjusted rank')}
                       {sortHeader('pts', 'Proj Pts', 'Projected fantasy points')}
@@ -1263,120 +1277,6 @@ export default function App() {
                   }
                 </div>
               ))}
-            </div>
-          </section>
-
-          {(() => {
-            const availPos = sportConfig.positions.filter(pos => footballEngine.topByPosition[pos]?.length > 0);
-            if (!availPos.length) return null;
-            const selPos = availPos.includes(footballPosFilter) ? footballPosFilter : availPos[0];
-            const topPlayers = (footballEngine.topByPosition[selPos] ?? []).slice(0, 5);
-            return (
-              <section className="card">
-                <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:12,flexWrap:'wrap'}}>
-                  <h4 style={{margin:0}}>Top Players by Position</h4>
-                  <select
-                    value={selPos}
-                    onChange={e => setFootballPosFilter(e.target.value)}
-                    style={{padding:'4px 10px',borderRadius:6,border:'1px solid #cbd5e0',fontSize:'0.9em'}}
-                  >
-                    {availPos.map(pos => <option key={pos} value={pos}>{pos}</option>)}
-                  </select>
-                </div>
-                <div style={{display:'flex',flexDirection:'column',gap:6}}>
-                  {topPlayers.map((p, i) => (
-                    <div key={p.id} style={{display:'flex',alignItems:'center',gap:8,padding:'6px 10px',background:'#f7fafc',borderRadius:6,border:'1px solid #e2e8f0'}}>
-                      <span style={{fontWeight:700,color:'#a0aec0',minWidth:22,textAlign:'right'}}>#{i+1}</span>
-                      <span className="badge">{p.position}</span>
-                      <strong style={{flex:1}}>{p.name}</strong>
-                      <span style={{color:'#718096',fontSize:'0.85em'}}>{p.team}</span>
-                      <span style={{color:'#4a5568',fontSize:'0.85em',minWidth:55,textAlign:'right'}}>{p.projections.fantasyPoints.toFixed(1)} pts</span>
-                      <button className="btn-primary" style={{padding:'2px 8px',fontSize:'0.78em'}}
-                        onClick={() => addFootballPick(p.id)}>Draft</button>
-                    </div>
-                  ))}
-                </div>
-              </section>
-            );
-          })()}
-
-          <section className="card">
-            <h4 style={{display:'flex',alignItems:'center',gap:10}}>
-              Drafted Players ({footballDraftedIds.length})
-              {footballDraftedIds.length > 0 && (
-                <button onClick={() => {
-                  const lastPick = footballPicks[footballPicks.length - 1];
-                  if (lastPick) { removeFootballPick(lastPick.playerId); showToast('↩️ Undid last pick'); }
-                }} style={{fontSize:'0.8em',padding:'3px 10px',borderRadius:6,border:'1px solid #e2e8f0',background:'#f7fafc',color:'#4a5568',cursor:'pointer',fontWeight:400}}>
-                  ↩ Undo Last
-                </button>
-              )}
-              {footballDraftedIds.length > 0 && (
-                <button onClick={() => setDraftedChipsExpanded(x => !x)}
-                  style={{fontSize:'0.8em',padding:'3px 10px',borderRadius:6,border:'1px solid #e2e8f0',background:'#f7fafc',color:'#4a5568',cursor:'pointer',fontWeight:400,marginLeft:'auto'}}>
-                  {draftedChipsExpanded ? '▲ Collapse' : '▼ Expand'}
-                </button>
-              )}
-            </h4>
-            {footballDraftedIds.length === 0
-              ? <p className="hint">No players drafted yet. See the 📜 History tab for the full draft order.</p>
-              : draftedChipsExpanded
-                ? <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
-                    {footballEngine.players
-                      .filter(p => footballDraftedIds.includes(p.id))
-                      .map(p => {
-                        const pick = footballPicks.find(fp => fp.playerId === p.id);
-                        const teamLabel = pick ? `T${pick.teamSlot}` : '?';
-                        return (
-                        <span key={p.id} style={{background:'#fed7d7',borderRadius:4,padding:'3px 8px',fontSize:'0.82em'}}>
-                          <span className="badge" style={{background:'#4a5568'}}>{teamLabel}</span>
-                          <span className="badge">{p.position}</span> {p.name}
-                          <button style={{marginLeft:4,background:'none',border:'none',cursor:'pointer',color:'#c53030'}}
-                            onClick={() => removeFootballPick(p.id)}>✕</button>
-                        </span>
-                        );
-                      })}
-                  </div>
-                : <p className="hint" style={{margin:0}}>Click ▼ Expand to see all {footballDraftedIds.length} drafted players, or view the 📜 History tab.</p>
-            }
-          </section>
-
-          {/* Per-team roster tracker — like baseball */}
-          <section className="card">
-            <h3>Team Rosters <span style={{fontSize:'0.85rem',fontWeight:400,color:'#b7791f'}}>— your team is highlighted ⭐</span></h3>
-            <div className="team-grid">
-              {Array.from({length: footballTeamSize}, (_, i) => i + 1)
-                .sort((a, b) => {
-                  if (a === footballTeamPos) return -1;
-                  if (b === footballTeamPos) return 1;
-                  return a - b;
-                })
-                .map(slot => {
-                  const isMine = slot === footballTeamPos;
-                  const currentOverallPick = footballPicks.length + 1;
-                  const onClock = calcTeamForPick(currentOverallPick, footballTeamSize) === slot;
-                  const teamPicks = footballPicks
-                    .filter(p => p.teamSlot === slot)
-                    .map(p => ({ pick: p, player: footballEngine.players.find(pl => pl.id === p.playerId) }))
-                    .filter(x => x.player);
-                  return (
-                    <div key={slot} className={`team-card${onClock ? ' on-clock' : ''}${isMine ? ' my-team' : ''}`}>
-                      <h4>
-                        {isMine ? '⭐ ' : ''}{onClock && '🕐 '}Team {slot}{isMine ? ' (You)' : ''}
-                        {isMine && <span className="my-team-badge">YOUR TEAM</span>}
-                        <span className="pick-count">({teamPicks.length} picks)</span>
-                      </h4>
-                      {teamPicks.length === 0
-                        ? <p className="empty-roster">—</p>
-                        : <ol>{teamPicks.map(({player}) => (
-                            <li key={player.id}>
-                              <span className="badge">{player.position}</span> {player.name}
-                            </li>
-                          ))}</ol>
-                      }
-                    </div>
-                  );
-                })}
             </div>
           </section>
         </div>
@@ -1957,90 +1857,6 @@ export default function App() {
       )}
 
       {/* ── KEEPERS TAB ─────────────────────────────────────────────────── */}
-      {activeTab === 'keepers' && (
-        <div className="tab-content" data-testid="keepers-tab">
-          <section className="card">
-            <h3>Keepers <span className="optional-tag">optional</span></h3>
-            <p className="hint">
-              Skip this tab entirely if your league doesn't use keepers.<br />
-              Fill in the player name and the round their slot occupies for each team, then
-              click <strong>Submit All Keepers</strong>. Empty slots are ignored.
-            </p>
-
-            <div className="keeper-grid-wrap" data-testid="keeper-grid">
-              <table className="keeper-table">
-                <thead>
-                  <tr>
-                    <th>Team</th>
-                    <th>Keeper 1</th><th>Rd</th>
-                    <th>Keeper 2</th><th>Rd</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {keeperGrid.map((team, ti) => (
-                    <tr key={ti} className={team.isMyTeam ? 'your-team-row' : ''}>
-                      <td className="keeper-team-name">{team.name}</td>
-                      {team.keepers.map((k, ki) => (
-                        <React.Fragment key={ki}>
-                          <td className="keeper-player-cell">
-                            <div className="keeper-search-wrap">
-                              <input
-                                type="text"
-                                className="keeper-player-input"
-                                placeholder={isFootball(sport) ? 'e.g. Josh Allen' : 'e.g. Mike Trout'}
-                                value={k.search}
-                                data-testid={`keeper-player-${ti}-${ki}`}
-                                onChange={e => searchKeeperPlayer(ti, ki, e.target.value)}
-                              />
-                              {k.player && (
-                                <span className="keeper-selected-name">
-                                  ✓ {k.player.name}
-                                  <button
-                                    className="keeper-clear"
-                                    onClick={() => updateKeeperSlot(ti, ki, { search: '', player: null, results: [] })}
-                                  >✕</button>
-                                </span>
-                              )}
-                              {k.results.length > 0 && (
-                                <ul className="keeper-dropdown" data-testid={`keeper-results-${ti}-${ki}`}>
-                                  {k.results.map(p => (
-                                    <li key={p.id}
-                                      onClick={() => updateKeeperSlot(ti, ki, {
-                                        player: p, search: '', results: [],
-                                      })}>
-                                      {p.name} <span className="badge">{p.position}</span>
-                                    </li>
-                                  ))}
-                                </ul>
-                              )}
-                            </div>
-                          </td>
-                          <td>
-                            <input
-                              type="number"
-                              className="keeper-round-input"
-                              placeholder="Rd"
-                              min="1"
-                              value={k.round}
-                              data-testid={`keeper-round-${ti}-${ki}`}
-                              onChange={e => updateKeeperSlot(ti, ki, { round: e.target.value })}
-                            />
-                          </td>
-                        </React.Fragment>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            <button className="btn-primary" style={{ marginTop: '16px' }} onClick={submitKeeperGrid}>
-              🔒 Submit All Keepers to Draft
-            </button>
-          </section>
-        </div>
-      )}
-
       {/* ── DRAFTED TAB ─────────────────────────────────────────────────── */}
       {activeTab === 'drafted' && (
         <div className="tab-content" data-testid="drafted-tab">
@@ -2050,72 +1866,98 @@ export default function App() {
               <p className="hint">No picks yet — start drafting on the Draft Board.</p>
             ) : (
               <>
-                <section className="card">
-                  <h3>📜 Draft Order ({footballPicks.length} picks)</h3>
-                  <div className="data-table-wrapper">
-                    <table className="data-table">
-                      <thead>
-                        <tr>
-                          <th>#</th><th>Rd</th><th>Team</th>
-                          <th>Player</th><th>Pos</th><th>NFL Team</th><th>Proj Pts</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {footballPicks.map(pick => {
-                          const player = footballEngine.players.find(p => p.id === pick.playerId);
-                          if (!player) return null;
-                          const round = Math.ceil(pick.overall / footballTeamSize);
-                          return (
-                            <tr key={pick.playerId}>
-                              <td className="pick-num">#{pick.overall}</td>
-                              <td>{round}</td>
-                              <td>Team {pick.teamSlot}{pick.teamSlot === footballTeamPos ? ' ⭐' : ''}</td>
-                              <td><strong>{player.name}</strong></td>
-                              <td><span className="badge">{player.position}</span></td>
-                              <td>{player.team}</td>
-                              <td>{player.projections.fantasyPoints.toFixed(1)}</td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                </section>
-                <section className="card">
-                  <h3>Team Rosters <span style={{fontSize:'0.85rem',fontWeight:400,color:'#b7791f'}}>— your team highlighted ⭐</span></h3>
-                  <div className="team-grid">
-                    {Array.from({length: footballTeamSize}, (_, i) => i + 1)
-                      .sort((a, b) => {
-                        if (a === footballTeamPos) return -1;
-                        if (b === footballTeamPos) return 1;
-                        return a - b;
-                      })
-                      .map(slot => {
-                        const isMine = slot === footballTeamPos;
-                        const teamPicks = footballPicks
-                          .filter(p => p.teamSlot === slot)
-                          .map(p => footballEngine.players.find(pl => pl.id === p.playerId))
-                          .filter(Boolean);
-                        return (
-                          <div key={slot} className={`team-card${isMine ? ' my-team' : ''}`}>
-                            <h4>
-                              {isMine ? '⭐ ' : ''}Team {slot}{isMine ? ' (You)' : ''}
-                              {isMine && <span className="my-team-badge">YOUR TEAM</span>}
-                              <span className="pick-count">({teamPicks.length})</span>
-                            </h4>
-                            {teamPicks.length === 0
-                              ? <p className="empty-roster">—</p>
-                              : <ol>{teamPicks.map(p => (
-                                  <li key={p.id}>
-                                    <span className="badge">{p.position}</span> {p.name}
-                                  </li>
-                                ))}</ol>
-                            }
-                          </div>
-                        );
-                      })}
-                  </div>
-                </section>
+                <div style={{display:'flex',gap:8,marginBottom:16}}>
+                  {[{id:'order',label:'📜 Draft Order'},{id:'rosters',label:'👥 Team Rosters'}].map(t => (
+                    <button key={t.id}
+                      style={{padding:'6px 14px',borderRadius:6,border:'1px solid #cbd5e0',
+                        background: draftedSubTab === t.id ? '#2b6cb0' : '#f7fafc',
+                        color: draftedSubTab === t.id ? '#fff' : '#4a5568',
+                        cursor:'pointer',fontWeight: draftedSubTab === t.id ? 600 : 400}}
+                      onClick={() => setDraftedSubTab(t.id)}>
+                      {t.label}
+                    </button>
+                  ))}
+                </div>
+
+                {draftedSubTab === 'order' && (
+                  <section className="card">
+                    <h3>📜 Draft Order ({footballPicks.length} picks)</h3>
+                    <div className="data-table-wrapper" style={{maxHeight:'600px',overflowY:'auto'}}>
+                      <table className="data-table">
+                        <thead style={{position:'sticky',top:0,background:'#fff',zIndex:1}}>
+                          <tr>
+                            <th>#</th><th>Rd</th><th>Team</th>
+                            <th>Player</th><th>Pos</th><th>NFL Team</th><th>Proj Pts</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {footballPicks.map(pick => {
+                            const player = footballEngine.players.find(p => p.id === pick.playerId);
+                            if (!player) return null;
+                            const round = Math.ceil(pick.overall / footballTeamSize);
+                            return (
+                              <tr key={pick.playerId}>
+                                <td className="pick-num">#{pick.overall}</td>
+                                <td>{round}</td>
+                                <td>Team {pick.teamSlot}{pick.teamSlot === footballTeamPos ? ' ⭐' : ''}</td>
+                                <td><strong>{player.name}</strong></td>
+                                <td><span className="badge">{player.position}</span></td>
+                                <td>{player.team}</td>
+                                <td>{player.projections.fantasyPoints.toFixed(1)}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </section>
+                )}
+
+                {draftedSubTab === 'rosters' && (
+                  <section className="card">
+                    <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:12}}>
+                      <h3 style={{margin:0}}>Team Rosters</h3>
+                      <select value={rosterViewTeam}
+                        onChange={e => setRosterViewTeam(Number(e.target.value))}
+                        style={{padding:'6px 12px',borderRadius:6,border:'1px solid #cbd5e0',fontSize:'0.95em'}}>
+                        {Array.from({length: footballTeamSize}, (_, i) => i + 1).map(slot => (
+                          <option key={slot} value={slot}>
+                            Team {slot}{slot === footballTeamPos ? ' ⭐ (You)' : ''}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    {(() => {
+                      const teamPicks = footballPicks
+                        .filter(p => p.teamSlot === rosterViewTeam)
+                        .map(p => ({ pick: p, player: footballEngine.players.find(pl => pl.id === p.playerId) }))
+                        .filter(x => x.player);
+                      if (teamPicks.length === 0) return <p className="hint">No picks yet for this team.</p>;
+                      return (
+                        <div className="data-table-wrapper">
+                          <table className="data-table">
+                            <thead><tr><th>Player</th><th>Pos</th><th>NFL Team</th><th>Pick</th><th>Round</th><th>Proj Pts</th></tr></thead>
+                            <tbody>
+                              {teamPicks.map(({pick, player}) => {
+                                const round = Math.ceil(pick.overall / footballTeamSize);
+                                return (
+                                  <tr key={player.id}>
+                                    <td><strong>{player.name}</strong></td>
+                                    <td><span className="badge">{player.position}</span></td>
+                                    <td>{player.team}</td>
+                                    <td className="pick-num">#{pick.overall}</td>
+                                    <td>Rd {round}</td>
+                                    <td>{player.projections.fantasyPoints.toFixed(1)}</td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      );
+                    })()}
+                  </section>
+                )}
               </>
             )
           ) : (
@@ -2620,6 +2462,63 @@ export default function App() {
                 </div>
               </div>
             )}
+          </section>
+
+          <section className="card">
+            <h3>🔒 Keepers <span className="optional-tag">optional</span></h3>
+            <p className="hint">
+              Skip if your league doesn't use keepers.
+              Fill in names and rounds, then click Submit.
+            </p>
+            <div className="keeper-grid-wrap" data-testid="keeper-grid">
+              <table className="keeper-table">
+                <thead>
+                  <tr><th>Team</th><th>Keeper 1</th><th>Rd</th><th>Keeper 2</th><th>Rd</th></tr>
+                </thead>
+                <tbody>
+                  {keeperGrid.map((team, ti) => (
+                    <tr key={ti} className={team.isMyTeam ? 'your-team-row' : ''}>
+                      <td className="keeper-team-name">{team.name}</td>
+                      {team.keepers.map((k, ki) => (
+                        <React.Fragment key={ki}>
+                          <td className="keeper-player-cell">
+                            <div className="keeper-search-wrap">
+                              <input type="text" className="keeper-player-input"
+                                placeholder={isFootball(sport) ? 'e.g. Josh Allen' : 'e.g. Mike Trout'}
+                                value={k.search} data-testid={`keeper-player-${ti}-${ki}`}
+                                onChange={e => searchKeeperPlayer(ti, ki, e.target.value)} />
+                              {k.player && (
+                                <span className="keeper-selected-name">✓ {k.player.name}
+                                  <button className="keeper-clear"
+                                    onClick={() => updateKeeperSlot(ti, ki, { search: '', player: null, results: [] })}>✕</button>
+                                </span>
+                              )}
+                              {k.results.length > 0 && (
+                                <ul className="keeper-dropdown" data-testid={`keeper-results-${ti}-${ki}`}>
+                                  {k.results.map(p => (
+                                    <li key={p.id} onClick={() => updateKeeperSlot(ti, ki, { player: p, search: '', results: [] })}>
+                                      {p.name} <span className="badge">{p.position}</span>
+                                    </li>
+                                  ))}
+                                </ul>
+                              )}
+                            </div>
+                          </td>
+                          <td>
+                            <input type="number" className="keeper-round-input" placeholder="Rd" min="1"
+                              value={k.round} data-testid={`keeper-round-${ti}-${ki}`}
+                              onChange={e => updateKeeperSlot(ti, ki, { round: e.target.value })} />
+                          </td>
+                        </React.Fragment>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <button className="btn-primary" style={{ marginTop: '16px' }} onClick={submitKeeperGrid}>
+              🔒 Submit All Keepers to Draft
+            </button>
           </section>
         </div>
       )}

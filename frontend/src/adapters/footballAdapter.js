@@ -104,23 +104,23 @@ export function normalizeFootballPlayers(rawPlayers, scoringPreset = 'ppr') {
         if (fromStats > 0) return fromStats;
         const fromBackend = p.nextGen?.projectedPoints ?? 0;
         if (fromBackend > 0) return fromBackend;
-        // Position-aware ADP synthetic so DST/K land in the correct pts range.
-        // Values calibrated to real-world full-season PPR projections:
-        //   QB  ADP 7  → ~472 pts  (Josh Allen tier)
-        //   RB  ADP 2  → ~347 pts  (Bijan tier)
-        //   WR  ADP 4  → ~304 pts  (CeeDee tier)
-        //   TE  ADP 10 → ~205 pts  (Kelce tier)
-        //   DST ADP 50 → ~135 pts  (top DST)
-        //   K   ADP130 → ~116 pts  (top K)
+        // Position-aware ADP synthetic so each position lands in the correct pts range.
+        // Calibrated to 2024 real-world full-season PPR totals & ESPN ADP scale:
+        //   QB  ADP  7  → ~429 pts  (Allen/Lamar tier)
+        //   RB  ADP  2  → ~311 pts  (Bijan tier)
+        //   WR  ADP  4  → ~288 pts  (JSN/CeeDee tier)
+        //   TE  ADP 10  → ~230 pts  (Bowers tier)
+        //   DST ADP147  → ~140 pts  (top DST)
+        //   K   ADP130  → ~170 pts  (top K)
         const adpVal = eAdp ?? 200;
         const pos = p.position;
-        if (pos === 'QB')  return Math.max(0, 480 - adpVal * 1.2);
-        if (pos === 'RB')  return Math.max(0, 350 - adpVal * 1.6);
-        if (pos === 'WR')  return Math.max(0, 310 - adpVal * 1.4);
-        if (pos === 'TE')  return Math.max(0, 220 - adpVal * 1.5);
-        if (pos === 'DST') return Math.max(0, 155 - adpVal * 0.4);
-        if (pos === 'K')   return Math.max(0, 155 - adpVal * 0.3);
-        return Math.max(0, 400 - adpVal * 1.6);  // fallback for unknown positions
+        if (pos === 'QB')  return Math.max(0, 435 - adpVal * 0.85);
+        if (pos === 'RB')  return Math.max(0, 314 - adpVal * 1.73);
+        if (pos === 'WR')  return Math.max(0, 294 - adpVal * 1.48);
+        if (pos === 'TE')  return Math.max(0, 235 - adpVal * 0.54);
+        if (pos === 'DST') return Math.max(0, 189 - adpVal * 0.33);
+        if (pos === 'K')   return Math.max(0, 225 - adpVal * 0.42);
+        return Math.max(0, 314 - adpVal * 1.73);  // fallback (RB-like decay)
       })(),
     };
   });
